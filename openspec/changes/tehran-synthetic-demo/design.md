@@ -1,5 +1,9 @@
 # Design: central Tehran synthetic demonstration
 
+## Scope decision: replace Frankfurt
+
+Tehran is the intended default across the application and analysis, not an optional parallel preview. The current separate map is an interim visual prototype only. Do not relabel or reuse Frankfurt geometry, context, coordinates or analytical results as Tehran. Preserve legacy databases and a documented rollback without exposing Frankfurt as the normal workflow. The geographic boundary still requires a suitable central-Tehran source.
+
 ## Approach
 
 1. Define and version a small central-Tehran boundary polygon, buffer for boundary-crossing roads, network snapshot date and checksums. Choose the exact boundary before importing. Extract an Iran OSM PBF from Geofabrik, clip locally, retain source OSM IDs, `highway`, name/name:fa, oneway, bridge, tunnel and layer. Record extraction rules and license metadata. Do not commit PBFs, generated databases or tile bundles.
@@ -15,4 +19,4 @@ The demo guard currently rejects any non-synthetic dataset. Mark demo incidents 
 
 ## Verification and rollback
 
-Use a tiny, redistributable OSM-like test fixture with at-grade intersections, grade separation and disconnected segments; validate node topology, coordinate round-trip and metric distances, deterministic results, incidents-on-network, and import idempotence. Test Persian/English, zoom/reset and provenance, provider failure, existing Frankfurt startup and APIs, and performance on a documented viewport. Back up the database before migration, restore on failure, switch back to Frankfurt profile without deleting or mutating its data, and document external dataset removal and rollback.
+Use a tiny, redistributable OSM-like test fixture with at-grade intersections, grade separation and disconnected segments; validate node topology, coordinate round-trip and metric distances, deterministic results, incidents-on-network, and import idempotence. Test Persian/English, zoom/reset and provenance, provider failure, existing Frankfurt startup and APIs, and performance on a documented viewport. Back up the database before migration, restore on failure, recover the legacy Frankfurt database without deleting or mutating its data, and document external dataset removal and rollback.

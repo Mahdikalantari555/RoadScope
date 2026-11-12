@@ -1,5 +1,9 @@
 # Tasks
 
+## 0. Replacement scope
+- [ ] 0.1 Make Tehran the default across the map, simulator and supported analytical workflows; remove Frankfurt-specific context from the normal user-facing path without deleting or reinterpreting legacy data.
+- [ ] 0.2 Verify the default startup uses a central-Tehran analytical dataset and fails clearly when it is not configured, rather than silently falling back to Frankfurt.
+
 ## 1. Data and safety
 - [ ] 1.1 Select and document central-Tehran polygon, buffer, extract version, licensing and tile provider; confirm availability from target environment.
 - [ ] 1.2 Design separate network and incident provenance, synthetic-only guard and profile isolation; document demo database location and backup/restore.

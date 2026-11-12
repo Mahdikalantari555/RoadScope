@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import { Calendar, FilterX, Flame, Layers3, Navigation } from 'lucide-react';
-import type { CmvFilterState, CmvStatePayload } from '../types/uai';
+import type { CmvFilterState, CmvStatePayload, NetworkLayersPayload } from '../types/uai';
+import { SegmentDetails } from './SegmentDetails';
 import { useLanguage } from '../i18n';
 import { analyticsText, dayLabels, domainLabel, formatNumber } from '../analyticsI18n';
+import { ActiveFilters } from './ActiveFilters';
 
 interface AnalyticsWorkspaceProps {
   darkMode: boolean;
   cmvData: CmvStatePayload | null;
+  networkLayers?: NetworkLayersPayload | null;
   filters: CmvFilterState;
   onUpdateFilters: (next: Partial<CmvFilterState>) => void;
   onResetAllFilters: () => void;
@@ -16,6 +19,7 @@ interface AnalyticsWorkspaceProps {
 export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
   darkMode,
   cmvData,
+  networkLayers = null,
   filters,
   onUpdateFilters,
   onResetAllFilters,
@@ -126,6 +130,9 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
           )}
         </div>
       </div>
+
+      <ActiveFilters filters={filters} onUpdate={onUpdateFilters} onReset={onResetAllFilters} />
+      <SegmentDetails segmentId={filters.segment_id} network={networkLayers} onClose={() => onUpdateFilters({ segment_id: null })} />
 
       {/* KPI Strip */}
       <div className="grid grid-cols-3 gap-2 font-mono tabular-nums">

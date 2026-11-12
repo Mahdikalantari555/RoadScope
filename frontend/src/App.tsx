@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { uaiApi } from './api/client';
 import { AnalyticsWorkspace } from './components/AnalyticsWorkspace';
+import { ActiveFilters } from './components/ActiveFilters';
 import { CitizenReportWorkspace } from './components/CitizenReportWorkspace';
 import { HeaderBar } from './components/HeaderBar';
 import { MapCanvas } from './components/MapCanvas';
+import { TehranPreview } from './components/TehranPreview';
 import { RiskEbWorkspace } from './components/RiskEbWorkspace';
 import { SimulatorWorkspace } from './components/SimulatorWorkspace';
 import { SpatialLabWorkspace } from './components/SpatialLabWorkspace';
@@ -36,7 +38,9 @@ const INITIAL_FILTERS: CmvFilterState = {
 };
 
 export const App: React.FC = () => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const [presentation, setPresentation] = useState(false);
+  const [tehranPreview, setTehranPreview] = useState(false);
   const [darkMode, setDarkMode] = useState<boolean>(true);
   const [meta, setMeta] = useState<PlatformMeta | null>(null);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceMode>('analytics');
@@ -170,6 +174,8 @@ export const App: React.FC = () => {
     }
   };
 
+  if (tehranPreview) return <TehranPreview onClose={() => setTehranPreview(false)} />;
+
   if (bootError) {
     return (
       <div className="min-h-screen bg-slate-950 text-rose-300 flex items-center justify-center p-8 font-mono text-sm">
@@ -210,6 +216,14 @@ export const App: React.FC = () => {
         onToggleTheme={() => setDarkMode((d) => !d)}
       />
 
+      <div className="flex items-center justify-between gap-3 px-3 py-1 border-b border-slate-700 text-xs">
+        <span>{meta.study_area} · <bdi>{meta.active_dataset.name}</bdi> {meta.active_dataset.is_synthetic && <strong className="text-amber-400"> · {language === 'fa' ? 'رخدادهای مصنوعی؛ نه خطر واقعی' : 'Synthetic incidents; not real-world risk'}</strong>}</span>
+        <button type="button" onClick={() => setTehranPreview(true)} className="shrink-0 rounded border border-amber-500/60 px-2 py-1 hover:bg-amber-500/20">{language === 'fa' ? 'نمونهٔ تهران' : 'Tehran sample'}</button>
+        <button type="button" aria-pressed={presentation} onClick={() => setPresentation(v => !v)} className="shrink-0 rounded border border-cyan-500/60 px-2 py-1 hover:bg-cyan-500/20">
+          {presentation ? (language === 'fa' ? 'خروج از نمای ارائه' : 'Exit presentation') : (language === 'fa' ? 'نمای ارائه' : 'Presentation view')}
+        </button>
+      </div>
+      {presentation && <ActiveFilters filters={filters} onUpdate={(patch) => setFilters(prev => ({ ...prev, ...patch }))} onReset={() => setFilters(INITIAL_FILTERS)} />}
       {cmvError && <div role="alert" className="bg-rose-950 text-rose-100 px-3 py-2 text-xs flex gap-3 items-center">
         <span>{t('analyticsLoadError')}: <bdi>{cmvError}</bdi></span>
         <button type="button" className="underline" onClick={() => void refreshCmv()}>{t('retry')}</button>
@@ -218,10 +232,11 @@ export const App: React.FC = () => {
       {/* Split Geovisual Analytics Canvas + Scientific Control & Statistical Workspace */}
       <main className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12">
         {/* Start: Persistent Multi-Scale WebGL Cartographic Canvas */}
-        <section className="lg:col-span-7 xl:col-span-7 h-[46vh] lg:h-full border-b lg:border-b-0 lg:border-e border-slate-800 relative">
+        <section className={`${presentation ? 'lg:col-span-12 h-full' : 'lg:col-span-7 xl:col-span-7 h-[46vh] lg:h-full'} border-b lg:border-b-0 lg:border-e border-slate-800 relative`}>
           <MapCanvas
             darkMode={darkMode}
             isSynthetic={meta.active_dataset.is_synthetic}
+            presentation={presentation}
             contextGeojson={meta.context_geojson}
             networkLayers={networkLayers}
             incidentsGeojson={cmvData?.incidents_geojson ?? null}
@@ -254,11 +269,12 @@ export const App: React.FC = () => {
         </section>
 
         {/* End: Active Scientific Persona Workspace */}
-        <section className="lg:col-span-5 xl:col-span-5 h-[54vh] lg:h-full min-h-0 overflow-hidden">
+        <section className={`${presentation ? 'hidden' : 'lg:col-span-5 xl:col-span-5 h-[54vh] lg:h-full'} min-h-0 overflow-hidden`}>
           {activeWorkspace === 'analytics' && (
             <AnalyticsWorkspace
               darkMode={darkMode}
               cmvData={cmvData}
+              networkLayers={networkLayers}
               filters={filters}
               onUpdateFilters={(patch) => setFilters((prev) => ({ ...prev, ...patch }))}
               onResetAllFilters={() => setFilters(INITIAL_FILTERS)}
