@@ -1,0 +1,491 @@
+import React, { useEffect, useState } from 'react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  MapPinPlus,
+  Send,
+  ShieldCheck,
+  Sparkles,
+} from 'lucide-react';
+import { uaiApi } from '../api/client';
+import type {
+  CategoryMeta,
+  ConflationAlert,
+  PersonaRole,
+  SeverityMeta,
+  SnapCandidate,
+} from '../types/uai';
+
+interface CitizenReportWorkspaceProps {
+  darkMode: boolean;
+  datasetId: number;
+  activeRole: PersonaRole;
+  categories: CategoryMeta[];
+  severities: SeverityMeta[];
+  clickedMapCoord: { lon: number; lat: number; ts: number } | null;
+  onActivatePinTool: () => void;
+  onUpdateVgiDraftOverlay: (overlay: {
+    rawLon: number;
+    rawLat: number;
+    uncertaintyCircle: GeoJSON.Geometry | null;
+    candidateSnaps: SnapCandidate[];
+    selectedSegmentId: number | null;
+  } | null) => void;
+  onReportSubmittedOrCorroborated: () => void;
+  onFlyTo: (lon: number, lat: number, zoom?: number) => void;
+}
+
+export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
+  darkMode,
+  datasetId,
+  activeRole,
+  categories,
+  severities,
+  clickedMapCoord,
+  onActivatePinTool,
+  onUpdateVgiDraftOverlay,
+  onReportSubmittedOrCorroborated,
+  onFlyTo,
+}) => {
+  const [lon, setLon] = useState<number>(8.68524);
+  const [lat, setLat] = useState<number>(50.11574);
+  const [obsRadiusM, setObsRadiusM] = useState<number>(20);
+  const [occurredUtc, setOccurredUtc] = useState<string>('2026-11-08T17:30:00Z');
+  const [categoryCode, setCategoryCode] = useState<string>('PEDESTRIAN_CROSSING');
+  const [severityCode, setSeverityCode] = useState<string>('MINOR_INJURY');
+  const [vehicles, setVehicles] = useState<number>(1);
+  const [pedestrians, setPedestrians] = useState<number>(1);
+  const [cyclists, setCyclists] = useState<number>(0);
+  const [emergencyPresent, setEmergencyPresent] = useState<boolean>(true);
+  const [weather, setWeather] = useState<'clear' | 'rain' | 'heavy_rain' | 'fog' | 'snow_ice'>('rain');
+  const [surface, setSurface] = useState<'dry' | 'wet' | 'standing_water' | 'icy'>('wet');
+  const [lighting, setLighting] = useState<'daylight' | 'twilight' | 'night_lit' | 'night_unlit'>('twilight');
+  const [narrative, setNarrative] = useState<string>(
+    'Observed conflict near crosswalk; reporting approximate position from sidewalk.'
+  );
+  const [attachmentName, setAttachmentName] = useState<string>('witness_scene_photo.jpg');
+
+  const [candidates, setCandidates] = useState<SnapCandidate[]>([]);
+  const [selectedSegId, setSelectedSegId] = useState<number | null>(null);
+  const [conflationAlerts, setConflationAlerts] = useState<ConflationAlert[]>([]);
+  const [metricReadout, setMetricReadout] = useState<{ x_m: number; y_m: number } | null>(null);
+
+  const [submitting, setSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+
+  // Sync clicked map coordinates into form
+  useEffect(() => {
+    if (clickedMapCoord) {
+      setLon(Number(clickedMapCoord.lon.toFixed(6)));
+      setLat(Number(clickedMapCoord.lat.toFixed(6)));
+    }
+  }, [clickedMapCoord]);
+
+  // Real-time Topological Map-Matching & Spatiotemporal Conflation Query
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await uaiApi.previewSnapAndConflate({
+          dataset_id: datasetId,
+          lon,
+          lat,
+          observational_radius_m: obsRadiusM,
+          occurred_at_utc: occurredUtc,
+          category_code: categoryCode,
+          max_net_dist_m: 160,
+          max_time_diff_min: 90,
+        });
+        if (cancelled) return;
+        setCandidates(res.candidate_snaps);
+        setConflationAlerts(res.conflation_alerts);
+        setMetricReadout({ x_m: res.raw_point.x_m, y_m: res.raw_point.y_m });
+        const topSeg = res.candidate_snaps[0]?.segment_id ?? null;
+        setSelectedSegId(topSeg);
+        onUpdateVgiDraftOverlay({
+          rawLon: res.raw_point.lon,
+          rawLat: res.raw_point.lat,
+          uncertaintyCircle: res.uncertainty_circle_geojson,
+          candidateSnaps: res.candidate_snaps,
+          selectedSegmentId: topSeg,
+        });
+      } catch (e) {
+        if (!cancelled) {
+          setFeedback({ type: 'err', msg: e instanceof Error ? e.message : 'Snap preview error' });
+        }
+      }
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [datasetId, lon, lat, obsRadiusM, occurredUtc, categoryCode]);
+
+  // Clear draft overlay on unmount
+  useEffect(() => {
+    return () => onUpdateVgiDraftOverlay(null);
+  }, []);
+
+  const loadOverpassDemoPreset = async () => {
+    // Project E=477604, N=5551962 (under City-Viadukt overpass crossing Berliner Strasse)
+    const res = await fetch('/api/v1/crs/project', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x_m: 477604.0, y_m: 5551962.0 }),
+    });
+    const p = await res.json();
+    setLon(p.lon);
+    setLat(p.lat);
+    setCategoryCode('PEDESTRIAN_CROSSING');
+    setObsRadiusM(22);
+    onFlyTo(p.lon, p.lat, 16.2);
+  };
+
+  const handleSubmitNew = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setFeedback(null);
+    try {
+      const res: any = await uaiApi.submitVgiReport({
+        dataset_id: datasetId,
+        lon,
+        lat,
+        observational_radius_m: obsRadiusM,
+        occurred_at_utc: occurredUtc,
+        category_code: categoryCode,
+        severity_code: severityCode,
+        involved_vehicles: vehicles,
+        involved_pedestrians: pedestrians,
+        involved_cyclists: cyclists,
+        emergency_response_present: emergencyPresent,
+        weather_condition: weather,
+        road_surface: surface,
+        lighting_condition: lighting,
+        narrative,
+        attachment_filenames: attachmentName.trim() ? [attachmentName.trim()] : [],
+        selected_segment_id: selectedSegId,
+        actor_role: activeRole,
+      });
+      setFeedback({
+        type: 'ok',
+        msg: `Submitted VGI Report #${res.accident_id} as 'unverified_raw_vgi' (Credibility=${res.vgi_credibility_score}, EXIF stripped).`,
+      });
+      onReportSubmittedOrCorroborated();
+    } catch (err) {
+      setFeedback({ type: 'err', msg: err instanceof Error ? err.message : 'Submission failed' });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCorroborate = async (accId: number) => {
+    setSubmitting(true);
+    setFeedback(null);
+    try {
+      const res: any = await uaiApi.corroborateIncident(accId, {
+        witness_notes: narrative,
+        observational_radius_m: obsRadiusM,
+        actor_role: activeRole,
+      });
+      setFeedback({
+        type: 'ok',
+        msg: `Corroborated Incident #${accId}! Witnesses: ${res.witness_count}, VGI Credibility boosted to ${res.vgi_credibility_score}.`,
+      });
+      onReportSubmittedOrCorroborated();
+    } catch (err) {
+      setFeedback({ type: 'err', msg: err instanceof Error ? err.message : 'Corroboration failed' });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const cardCls = `rounded-md border p-3 ${
+    darkMode ? 'bg-slate-900/75 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
+  }`;
+
+  return (
+    <div className="h-full overflow-y-auto p-3 space-y-3 text-xs">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h2 className="font-semibold text-sm flex items-center gap-1.5">
+            <MapPinPlus className="w-4 h-4 text-rose-400" />
+            Uncertainty-Aware Citizen VGI Acquisition
+          </h2>
+          <p className="text-[11px] opacity-70">
+            Preserves raw observation + probabilistic topological snap + real-time network conflation
+          </p>
+        </div>
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={onActivatePinTool}
+            className="px-2 py-1 rounded bg-rose-500/20 border border-rose-400/60 text-rose-200 font-mono text-[11px]"
+          >
+            Click Map Pin
+          </button>
+          <button
+            type="button"
+            onClick={loadOverpassDemoPreset}
+            title="Test Overpass vs Surface Arterial Topological Map-Matching"
+            className="px-2 py-1 rounded bg-cyan-500/20 border border-cyan-400/60 text-cyan-200 font-mono text-[11px] flex items-center gap-1"
+          >
+            <Sparkles className="w-3 h-3" /> Overpass Demo
+          </button>
+        </div>
+      </div>
+
+      {feedback && (
+        <div
+          className={`p-2.5 rounded border font-mono text-[11px] flex items-center gap-2 ${
+            feedback.type === 'ok'
+              ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-200'
+              : 'border-rose-500/60 bg-rose-500/15 text-rose-200'
+          }`}
+        >
+          {feedback.type === 'ok' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          <span>{feedback.msg}</span>
+        </div>
+      )}
+
+      {/* Real-Time Spatiotemporal Conflation Alert (US-2.3) */}
+      {conflationAlerts.length > 0 && (
+        <div className="rounded-md border border-amber-500/60 bg-amber-500/10 p-3 space-y-2">
+          <div className="font-semibold text-amber-300 flex items-center justify-between">
+            <span>Spatiotemporal Network Conflation Alert ({conflationAlerts.length} Nearby)</span>
+            <span className="text-[10px] font-mono">d_net ≤ 160m · Δt ≤ 90m</span>
+          </div>
+          {conflationAlerts.slice(0, 2).map((al) => (
+            <div
+              key={al.accident_id}
+              className="p-2 rounded bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-2"
+            >
+              <div className="space-y-0.5">
+                <div className="font-semibold">
+                  #{al.accident_id} · {al.category_label} ({al.severity_label})
+                </div>
+                <div className="text-[10px] font-mono text-slate-400">
+                  {al.segment_name} · d_net={al.network_distance_m}m · Δt={al.time_diff_min}min · Witnesses={al.witness_count}
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => handleCorroborate(al.accident_id)}
+                className="px-2.5 py-1 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-[11px] shrink-0 flex items-center gap-1"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" /> Corroborate
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Candidate Probabilistic Topological Snaps (US-2.1 & US-3.1) */}
+      <div className={cardCls}>
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="font-semibold">Probabilistic Topological Snap Candidates</span>
+          {metricReadout && (
+            <span className="text-[10px] font-mono text-cyan-400">
+              Raw E {metricReadout.x_m}m · N {metricReadout.y_m}m
+            </span>
+          )}
+        </div>
+        <div className="space-y-1.5">
+          {candidates.slice(0, 3).map((c) => {
+            const isSel = selectedSegId === c.segment_id;
+            return (
+              <div
+                key={c.segment_id}
+                onClick={() => {
+                  setSelectedSegId(c.segment_id);
+                  onUpdateVgiDraftOverlay({
+                    rawLon: lon,
+                    rawLat: lat,
+                    uncertaintyCircle: null,
+                    candidateSnaps: candidates,
+                    selectedSegmentId: c.segment_id,
+                  });
+                }}
+                className={`p-2 rounded border cursor-pointer font-mono text-[10.5px] ${
+                  isSel ? 'border-emerald-400 bg-emerald-500/10' : 'border-slate-800 opacity-80'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-sans font-semibold">
+                    #{c.rank} {c.segment_name} (Elev L{c.elevation_level})
+                  </span>
+                  <span className="text-emerald-400 font-bold">P={(c.snap_probability * 100).toFixed(1)}%</span>
+                </div>
+                <div className="flex items-center justify-between text-[10px] opacity-80 mt-0.5">
+                  <span>
+                    d⊥={c.orthogonal_dist_m}m · LRS m={c.linear_offset_m}m · {c.road_class}
+                  </span>
+                  {c.topological_override && (
+                    <span className="px-1 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                      Overrides Naive Euclidean!
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Structured Incident Attribution Form (US-2.2) */}
+      <form onSubmit={handleSubmitNew} className={`${cardCls} space-y-2.5`}>
+        <div className="font-semibold">Structured Citizen Report Attribution</div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[10px] uppercase opacity-70 mb-0.5">Longitude (WGS84)</label>
+            <input
+              type="number"
+              step="0.00001"
+              value={lon}
+              onChange={(e) => setLon(Number(e.target.value))}
+              className="w-full px-2 py-1 rounded border border-slate-700 bg-slate-950 font-mono"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase opacity-70 mb-0.5">Latitude (WGS84)</label>
+            <input
+              type="number"
+              step="0.00001"
+              value={lat}
+              onChange={(e) => setLat(Number(e.target.value))}
+              className="w-full px-2 py-1 rounded border border-slate-700 bg-slate-950 font-mono"
+            />
+          </div>
+        </div>
+
+        <div>
+          <div className="flex justify-between font-mono text-[11px] mb-0.5">
+            <span>Observational Positional Uncertainty Radius</span>
+            <span className="text-cyan-400 font-bold">±{obsRadiusM} m</span>
+          </div>
+          <input
+            type="range"
+            min={5}
+            max={120}
+            step={1}
+            value={obsRadiusM}
+            onChange={(e) => setObsRadiusM(Number(e.target.value))}
+            className="w-full accent-cyan-400"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[10px] uppercase opacity-70 mb-0.5">Accident Taxonomy</label>
+            <select
+              value={categoryCode}
+              onChange={(e) => setCategoryCode(e.target.value)}
+              className="w-full px-2 py-1 rounded border border-slate-700 bg-slate-950 font-mono text-[11px]"
+            >
+              {categories.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase opacity-70 mb-0.5">Observed Severity</label>
+            <select
+              value={severityCode}
+              onChange={(e) => setSeverityCode(e.target.value)}
+              className="w-full px-2 py-1 rounded border border-slate-700 bg-slate-950 font-mono text-[11px]"
+            >
+              {severities.map((s) => (
+                <option key={s.code} value={s.code}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[10px] uppercase opacity-70 mb-0.5">Incident Timestamp (UTC)</label>
+            <input
+              type="text"
+              value={occurredUtc}
+              onChange={(e) => setOccurredUtc(e.target.value)}
+              className="w-full px-2 py-1 rounded border border-slate-700 bg-slate-950 font-mono text-[11px]"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase opacity-70 mb-0.5">Weather / Surface / Light</label>
+            <div className="grid grid-cols-3 gap-1">
+              <select value={weather} onChange={(e) => setWeather(e.target.value as any)} className="px-1 py-1 rounded border border-slate-700 bg-slate-950 text-[10px]">
+                <option value="clear">Clear</option>
+                <option value="rain">Rain</option>
+                <option value="heavy_rain">Hvy Rain</option>
+                <option value="fog">Fog</option>
+                <option value="snow_ice">Snow</option>
+              </select>
+              <select value={surface} onChange={(e) => setSurface(e.target.value as any)} className="px-1 py-1 rounded border border-slate-700 bg-slate-950 text-[10px]">
+                <option value="dry">Dry</option>
+                <option value="wet">Wet</option>
+                <option value="icy">Icy</option>
+              </select>
+              <select value={lighting} onChange={(e) => setLighting(e.target.value as any)} className="px-1 py-1 rounded border border-slate-700 bg-slate-950 text-[10px]">
+                <option value="daylight">Day</option>
+                <option value="twilight">Dusk</option>
+                <option value="night_lit">Night</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-2 font-mono text-[11px]">
+          <div>
+            <label className="block text-[9px] uppercase opacity-70">Vehicles</label>
+            <input type="number" min={0} max={20} value={vehicles} onChange={(e) => setVehicles(Number(e.target.value))} className="w-full px-1.5 py-1 rounded border border-slate-700 bg-slate-950" />
+          </div>
+          <div>
+            <label className="block text-[9px] uppercase opacity-70">Pedestr.</label>
+            <input type="number" min={0} max={20} value={pedestrians} onChange={(e) => setPedestrians(Number(e.target.value))} className="w-full px-1.5 py-1 rounded border border-slate-700 bg-slate-950" />
+          </div>
+          <div>
+            <label className="block text-[9px] uppercase opacity-70">Cyclists</label>
+            <input type="number" min={0} max={20} value={cyclists} onChange={(e) => setCyclists(Number(e.target.value))} className="w-full px-1.5 py-1 rounded border border-slate-700 bg-slate-950" />
+          </div>
+          <label className="flex items-center gap-1 pt-3 text-[10px]">
+            <input type="checkbox" checked={emergencyPresent} onChange={(e) => setEmergencyPresent(e.target.checked)} />
+            EMS
+          </label>
+        </div>
+
+        <div>
+          <label className="block text-[10px] uppercase opacity-70 mb-0.5">Witness Narrative &amp; Media Metadata (EXIF Auto-Stripped)</label>
+          <textarea
+            rows={2}
+            value={narrative}
+            onChange={(e) => setNarrative(e.target.value)}
+            className="w-full px-2 py-1 rounded border border-slate-700 bg-slate-950 text-[11px]"
+          />
+          <input
+            type="text"
+            placeholder="Optional media filename (EXIF GPS stripped on ingest)"
+            value={attachmentName}
+            onChange={(e) => setAttachmentName(e.target.value)}
+            className="mt-1 w-full px-2 py-1 rounded border border-slate-700 bg-slate-950 font-mono text-[10px]"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={submitting}
+          className="w-full py-1.5 rounded bg-rose-500 hover:bg-rose-400 text-white font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50"
+        >
+          <Send className="w-3.5 h-3.5" />
+          Submit New Distinct VGI Report (State: Unverified Raw VGI)
+        </button>
+      </form>
+    </div>
+  );
+};

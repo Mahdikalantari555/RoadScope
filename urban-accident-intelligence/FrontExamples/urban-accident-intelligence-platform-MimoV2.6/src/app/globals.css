@@ -1,0 +1,270 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   URBAN ACCIDENT INTELLIGENCE — design tokens
+   Surface language: anodised aluminium console plate under amber room light.
+   ------------------------------------------------------------------------- */
+
+:root {
+  --bg: #0b0e11;
+  --bg-deep: #070a0c;
+  --panel: #12171c;
+  --panel-2: #161c22;
+  --panel-3: #1a2128;
+  --rule: #1d252c;
+  --rule-strong: #2a343c;
+  --text: #e6edf2;
+  --text-2: #8fa3af;
+  --text-3: #5b6c78;
+  --amber: #f2a03d;
+  --amber-light: #ffd9a0;
+  --amber-dark: #b9722a;
+  --cyan: #4fd1c5;
+  --cyan-dark: #2c7f78;
+  --fatal: #e5484d;
+  --serious: #f2762e;
+  --slight: #f2a03d;
+  --damage: #6e9bc5;
+  --warn: #e5c24d;
+  --ok: #5fcf8e;
+  --shadow: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 12px 32px -12px rgb(0 0 0 / 0.7);
+  --map-bg: #0b0e11;
+  --map-road-arterial: #7e6a50;
+  --map-road-collector: #4a4740;
+  --map-road-local: #2f2e2b;
+  --map-road-casing: #06080a;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: #f4f1ea;
+  --bg-deep: #ebe6dc;
+  --panel: #ffffff;
+  --panel-2: #faf8f3;
+  --panel-3: #f1ede4;
+  --rule: #dcd5c8;
+  --rule-strong: #c4bba9;
+  --text: #16191c;
+  --text-2: #5c6670;
+  --text-3: #8b8375;
+  --amber: #b9722a;
+  --amber-light: #e8b878;
+  --amber-dark: #8a5217;
+  --cyan: #1f8f86;
+  --cyan-dark: #166b64;
+  --fatal: #c62c30;
+  --serious: #d1611f;
+  --slight: #b9722a;
+  --damage: #3c6fa5;
+  --warn: #a3861f;
+  --ok: #2f8b56;
+  --shadow: 0 1px 0 rgb(255 255 255 / 0.8) inset, 0 10px 26px -18px rgb(60 50 30 / 0.5);
+  --map-bg: #eae5da;
+  --map-road-arterial: #c9a877;
+  --map-road-collector: #d5cdbc;
+  --map-road-local: #e2dbcd;
+  --map-road-casing: #ffffff;
+  color-scheme: light;
+}
+
+* {
+  border-color: var(--rule);
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  overflow: hidden;
+}
+
+.font-mono {
+  font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tnum {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Engraved micro-label: the connective tissue of the whole interface. */
+.micro {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.micro-rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.micro-rule::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+}
+
+.hairline {
+  border-bottom: 1px solid var(--rule);
+}
+
+/* Console texture: the anodised plate, held far back. */
+.plate-texture {
+  background-image: url("/images/console-plate.jpg");
+  background-size: cover;
+  background-position: center;
+  opacity: 0.14;
+  mix-blend-mode: luminosity;
+  pointer-events: none;
+}
+[data-theme="light"] .plate-texture {
+  opacity: 0.07;
+  mix-blend-mode: multiply;
+}
+
+/* Scrollbars tuned to the console. */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-deep);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--rule-strong);
+  border: 2px solid var(--bg-deep);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  background: var(--rule-strong);
+  outline: none;
+  border-radius: 0;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 18px;
+  background: var(--amber);
+  border: 1px solid var(--bg-deep);
+  cursor: ew-resize;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 18px;
+  border-radius: 0;
+  background: var(--amber);
+  border: 1px solid var(--bg-deep);
+  cursor: ew-resize;
+}
+
+:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: 1px;
+}
+
+/* MapLibre chrome reset so the plate stays square and console-like. */
+.maplibregl-ctrl-group {
+  border-radius: 2px !important;
+  background: var(--panel) !important;
+  border: 1px solid var(--rule) !important;
+  box-shadow: none !important;
+}
+.maplibregl-ctrl-group button {
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid var(--rule) !important;
+}
+.maplibregl-ctrl button .maplibregl-ctrl-icon {
+  filter: invert(0.72) sepia(0.2);
+}
+.maplibregl-ctrl-attrib {
+  background: transparent !important;
+  color: var(--text-3) !important;
+  font-size: 9px !important;
+}
+.maplibregl-ctrl-attrib a {
+  color: var(--text-3) !important;
+}
+.maplibregl-ctrl-scale {
+  background: transparent !important;
+  border-color: var(--text-3) !important;
+  color: var(--text-2) !important;
+  font-family: "IBM Plex Mono", monospace !important;
+  font-size: 9px !important;
+}
+.maplibregl-popup-content {
+  background: var(--panel) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px !important;
+  padding: 0 !important;
+  box-shadow: var(--shadow) !important;
+}
+.maplibregl-popup-tip {
+  border-top-color: var(--panel) !important;
+  border-bottom-color: var(--panel) !important;
+}
+
+@keyframes sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+.sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  background: linear-gradient(90deg, transparent, rgb(242 160 61 / 0.28), transparent);
+  animation: sweep 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

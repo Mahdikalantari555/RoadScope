@@ -1,0 +1,74 @@
+"use client";
+import { useMemo, useState } from "react";
+import MapCanvas, { type FC } from "@/components/MapCanvas";
+import { Hist } from "@/components/charts";
+import { Panel, Stat, Swatches, fmt } from "@/components/ui";
+import { useJson, useNetwork, useTheme, sevColor, fmtDate } from "@/components/hooks";
+import { STATUS_COLORS } from "@/lib/colors";
+
+interface QItem { id: number; status: string; severityId: number; categoryId: number; occurredAt: string; reportedAt: string; lagMin: number; snapDistanceM: number | null; snapPosterior: number | null; uncertaintyRadiusM: number; credibility: number; witnessCount: number; segmentId: number | null; offsetM: number | null; isSynthetic: boolean; description: string | null; candidates: { segmentId: number; m: number; distanceM: number; posterior: number; roadClass: string }[]; duplicates: { id: number; dNet: number; dtMin: number; kernel: number }[]; rawLon: number; rawLat: number; lon: number; lat: number; weather: string; lighting: string; vehicles: number; pedestrians: number }
+interface Cluster { canonicalId: number; size: number; memberIds: number[]; members: { id: number; status: string; severityId: number; categoryId: number; occurredAt: string; credibility: number; witnessCount: number; snapDistanceM: number | null; lon: number; lat: number }[] }
+interface Resp { source: { kind: string }; window: { dMaxM: number; dtMin: number }; queue: QItem[]; clusters: Cluster[]; diagnostics: { total: number; statusCounts: Record<string, number>; synthetic: number; empirical: number; rejectionRate: number; mergeRate: number; snapHist: { bin: string; n: number }[]; lagHist: { bin: string; n: number }[]; meanSnapM: number; meanLagMin: number; meanPosterior: number; meanCredibility: number; multiWitness: number }; audit: { id: number; entity: string; entityId: number; action: string; createdAt: string; details: Record<string, unknown> }[] }
+
+export default function StewardPage() {
+  const { net } = useNetwork(); const theme = useTheme();
+  const [dMax, setDMax] = useState(150); const [dtMin, setDtMin] = useState(60);
+  const { data, loading, refresh } = useJson<Resp>(net?.source ? `/api/steward?dMax=${dMax}&dtMin=${dtMin}` : null);
+  const [sel, setSel] = useState<number | null>(null); const [tab, setTab] = useState<"queue" | "clusters" | "qa">("queue");
+  const [notes, setNotes] = useState(""); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState<string | null>(null);
+  const sevById = new Map((net?.severities ?? []).map((s) => [s.id, s])); const catById = new Map((net?.categories ?? []).map((c) => [c.id, c]));
+  const item = data?.queue.find((q) => q.id === sel) ?? null;
+
+  const act = async (id: number, action: string, extra: Record<string, unknown> = {}) => { setBusy(true); setMsg(null); const r = await fetch(`/api/accidents/${id}`, { method: "POST", headers: { "x-role": "steward" }, body: JSON.stringify({ action, notes, ...extra }) }); const d = await r.json(); setMsg(d.ok ? `#${id}: ${action} ✓` : d.error); setBusy(false); setNotes(""); refresh(); };
+
+  const points = useMemo<FC>(() => ({ type: "FeatureCollection", features: (data?.queue ?? []).map((q) => ({ type: "Feature", id: q.id, properties: { id: q.id, status: q.status, sev: q.severityId }, geometry: { type: "Point", coordinates: [q.lon, q.lat] } })) }), [data]);
+  const markers = useMemo<FC>(() => { const f: GeoJSON.Feature[] = []; if (item) { f.push({ type: "Feature", properties: { color: "#f2b55e", radius: 7 }, geometry: { type: "Point", coordinates: [item.rawLon, item.rawLat] } }); f.push({ type: "Feature", properties: { color: "#f2b55e" }, geometry: { type: "LineString", coordinates: [[item.rawLon, item.rawLat], [item.lon, item.lat]] } }); for (const d of item.duplicates) { const o = data?.queue.find((q) => q.id === d.id); if (o) f.push({ type: "Feature", properties: { color: "#ef4444", radius: 8 }, geometry: { type: "Point", coordinates: [o.lon, o.lat] } }); } } return { type: "FeatureCollection", features: f }; }, [item, data]);
+
+  return (
+    <div className="h-full grid" style={{ gridTemplateColumns: "420px 1fr 340px" }}>
+      <aside className="min-h-0 flex flex-col border-r" style={{ borderColor: "var(--line)" }}>
+        <div className="flex items-center gap-1 p-1.5 border-b" style={{ borderColor: "var(--line)" }}>
+          {(["queue", "clusters", "qa"] as const).map((t) => <button key={t} className={`btn btn-xs ${tab === t ? "btn-primary" : ""}`} onClick={() => setTab(t)}>{t === "queue" ? `Triage queue (${data?.queue.length ?? 0})` : t === "clusters" ? `Duplicate clusters (${data?.clusters.length ?? 0})` : "QA diagnostics"}</button>)}
+          {loading && <span className="text-[10px] animate-pulse ml-auto" style={{ color: "var(--accent)" }}>computing…</span>}
+        </div>
+        <div className="flex items-center gap-2 px-2 py-1 text-[10px] border-b" style={{ borderColor: "var(--line)", color: "var(--fg-2)" }}>Kernel window Δd<sub>net</sub><input type="range" min={50} max={400} step={25} value={dMax} onChange={(e) => setDMax(Number(e.target.value))} /><span className="mono">{dMax} m</span> Δt<input type="range" min={15} max={240} step={15} value={dtMin} onChange={(e) => setDtMin(Number(e.target.value))} /><span className="mono">{dtMin} min</span></div>
+        <div className="flex-1 min-h-0 overflow-auto">
+          {tab === "queue" && <table className="tbl"><thead><tr><th>#</th><th>Status</th><th>Sev</th><th>Occurred</th><th>Lag</th><th>d⊥</th><th>P</th><th>Cred</th><th>Dup</th></tr></thead><tbody>
+            {(data?.queue ?? []).map((q) => <tr key={q.id} className={sel === q.id ? "sel" : ""} onClick={() => setSel(q.id)}><td className="mono">{q.id}{!q.isSynthetic && <span title="empirical" style={{ color: "var(--accent)" }}>●</span>}</td><td style={{ color: STATUS_COLORS[q.status] }}>{q.status}</td><td style={{ color: sevColor(sevById.get(q.severityId)?.code) }}>{sevById.get(q.severityId)?.code}</td><td className="mono">{fmtDate(q.occurredAt).slice(5, 16)}</td><td className="mono">{fmt(q.lagMin, 0)}m</td><td className="mono">{fmt(q.snapDistanceM, 1)}</td><td className="mono">{fmt(q.snapPosterior)}</td><td className="mono">{fmt(q.credibility)}</td><td className="mono" style={{ color: q.duplicates.length ? "var(--warn)" : undefined }}>{q.duplicates.length || ""}</td></tr>)}
+          </tbody></table>}
+          {tab === "clusters" && <div className="p-1.5 space-y-1.5">{(data?.clusters ?? []).map((c) => <div key={c.canonicalId} className="panel p-1.5 text-[11px]"><div className="flex justify-between items-center"><b>Cluster · canonical #{c.canonicalId} · {c.size} reports</b><button className="btn btn-xs btn-primary" disabled={busy} onClick={async () => { for (const m of c.members) if (m.id !== c.canonicalId && m.status !== "verified") await act(m.id, "merge", { targetId: c.canonicalId }); }}>Merge all into canonical</button></div>
+            <table className="tbl mt-1"><thead><tr><th>#</th><th>Status</th><th>Sev</th><th>Type</th><th>Occurred</th><th>Cred</th><th>W</th><th></th></tr></thead><tbody>{c.members.map((m) => <tr key={m.id} onClick={() => setSel(m.id)}><td className="mono">{m.id}</td><td style={{ color: STATUS_COLORS[m.status] }}>{m.status}</td><td style={{ color: sevColor(sevById.get(m.severityId)?.code) }}>{sevById.get(m.severityId)?.code}</td><td>{catById.get(m.categoryId)?.label}</td><td className="mono">{fmtDate(m.occurredAt).slice(5, 16)}</td><td className="mono">{fmt(m.credibility)}</td><td className="mono">{m.witnessCount}</td><td>{m.id !== c.canonicalId && m.status !== "verified" && <button className="btn btn-xs" disabled={busy} onClick={(e) => { e.stopPropagation(); act(m.id, "merge", { targetId: c.canonicalId }); }}>merge →</button>}</td></tr>)}</tbody></table></div>)}{data && !data.clusters.length && <div className="p-2" style={{ color: "var(--fg-2)" }}>No unresolved duplicate clusters within the current kernel window.</div>}</div>}
+          {tab === "qa" && data?.diagnostics && <div className="p-1.5 space-y-1.5">
+            <div className="panel grid grid-cols-3"><Stat label="Total reports" value={data.diagnostics.total} sub={`${data.diagnostics.synthetic} synthetic · ${data.diagnostics.empirical} empirical`} /><Stat label="Rejection rate" value={(data.diagnostics.rejectionRate * 100).toFixed(1) + "%"} sub={`merge ${(data.diagnostics.mergeRate * 100).toFixed(1)}%`} /><Stat label="Multi-witness" value={data.diagnostics.multiWitness} sub={`mean cred ${fmt(data.diagnostics.meanCredibility)}`} /></div>
+            <Panel title={`Positional drift (snap distance) · mean ${fmt(data.diagnostics.meanSnapM, 1)} m`}><Hist bins={data.diagnostics.snapHist} /></Panel>
+            <Panel title={`Reporting lag (min) · mean ${fmt(data.diagnostics.meanLagMin, 0)} min`}><Hist bins={data.diagnostics.lagHist} color="#f2b55e" /></Panel>
+            <Panel title="Lifecycle states"><div className="flex flex-wrap gap-2 text-[11px]">{Object.entries(data.diagnostics.statusCounts).map(([k, v]) => <span key={k} className="tag" style={{ borderColor: STATUS_COLORS[k], color: STATUS_COLORS[k] }}>{k}: {v}</span>)}</div><div className="mt-1 text-[10px]" style={{ color: "var(--fg-2)" }}>Mean snap posterior {fmt(data.diagnostics.meanPosterior)} · synthetic and empirical reports are tagged at the row level and never mixed without the flag.</div></Panel>
+            <Panel title="Immutable audit log (latest 25)" bodyClass="max-h-64 overflow-auto p-0"><table className="tbl"><thead><tr><th>#</th><th>Entity</th><th>Action</th><th>When</th></tr></thead><tbody>{data.audit.map((a) => <tr key={a.id}><td className="mono">{a.id}</td><td>{a.entity}#{a.entityId}</td><td>{a.action}</td><td className="mono">{fmtDate(a.createdAt)}</td></tr>)}</tbody></table></Panel>
+          </div>}
+        </div>
+      </aside>
+      <MapCanvas segments={net?.segments} points={points} markers={markers} fitBbox={net?.bbox ?? null} theme={theme} selectedSegmentIds={item?.segmentId ? [item.segmentId] : []}
+        pointColor={["match", ["get", "status"], "raw", STATUS_COLORS.raw, "flagged", STATUS_COLORS.flagged, "#888"]} pointRadius={["case", ["==", ["get", "id"], sel ?? -1], 8, 4]}
+        onPointClick={(id) => setSel(id)} hoverHtml={(l, pr) => (l === "points" ? `Report #${pr.id} · ${pr.status}` : l === "segments" ? `Segment #${pr.id} · ${pr.roadClass}` : null)}>
+        <div className="absolute top-2 left-2 panel p-2"><Swatches items={[{ color: STATUS_COLORS.raw, label: "raw", shape: "dot" }, { color: STATUS_COLORS.flagged, label: "flagged", shape: "dot" }, { color: "#f2b55e", label: "raw click → snap", shape: "dot" }, { color: "#ef4444", label: "duplicate candidates", shape: "dot" }]} /></div>
+      </MapCanvas>
+      <aside className="min-h-0 overflow-y-auto border-l p-1.5 space-y-1.5" style={{ borderColor: "var(--line)" }}>
+        {!item && <div className="p-2 text-[11px]" style={{ color: "var(--fg-2)" }}>Select a report from the queue or map to review it. Steward role is asserted for all lifecycle actions and every action is appended to the immutable audit log.</div>}
+        {item && <>
+          <Panel title={`Report #${item.id}`} right={item.isSynthetic ? <span className="tag tag-syn">synthetic</span> : <span className="tag">empirical</span>}>
+            <dl className="kv"><dt>Status</dt><dd style={{ color: STATUS_COLORS[item.status] }}>{item.status}</dd><dt>Severity / type</dt><dd>{sevById.get(item.severityId)?.label} · {catById.get(item.categoryId)?.label}</dd><dt>Occurred</dt><dd>{fmtDate(item.occurredAt)}</dd><dt>Reported</dt><dd>{fmtDate(item.reportedAt)} (+{fmt(item.lagMin, 0)} min)</dd><dt>Raw σ</dt><dd>{item.uncertaintyRadiusM} m</dd><dt>Snapped</dt><dd>seg #{item.segmentId} @ m={fmt(item.offsetM, 1)}</dd><dt>d⊥ / P(snap)</dt><dd>{fmt(item.snapDistanceM, 1)} m / {fmt(item.snapPosterior)}</dd><dt>Witnesses / cred.</dt><dd>{item.witnessCount} / {fmt(item.credibility)}</dd><dt>Env</dt><dd>{item.weather} · {item.lighting}</dd><dt>Involved</dt><dd>{item.vehicles} veh · {item.pedestrians} ped</dd></dl>
+            {item.description && <div className="mt-1 text-[11px] italic" style={{ color: "var(--fg-1)" }}>“{item.description}”</div>}
+          </Panel>
+          <Panel title="Map-matching hypotheses (re-assign edge)"><table className="tbl"><thead><tr><th>Seg</th><th>Class</th><th>d⊥</th><th>m</th><th>P</th><th></th></tr></thead><tbody>{item.candidates.map((c) => <tr key={c.segmentId} className={c.segmentId === item.segmentId ? "sel" : ""}><td className="mono">#{c.segmentId}</td><td>{c.roadClass}</td><td className="mono">{c.distanceM}</td><td className="mono">{c.m}</td><td className="mono">{c.posterior}</td><td>{c.segmentId !== item.segmentId && <button className="btn btn-xs" disabled={busy} onClick={() => act(item.id, "edit", { chosenSegmentId: c.segmentId })}>assign</button>}</td></tr>)}</tbody></table></Panel>
+          {item.duplicates.length > 0 && <Panel title="Spatiotemporal duplicate candidates"><table className="tbl"><thead><tr><th>#</th><th>d_net</th><th>Δt</th><th>κ</th><th></th></tr></thead><tbody>{item.duplicates.map((d) => <tr key={d.id}><td className="mono">{d.id}</td><td className="mono">{fmt(d.dNet, 0)} m</td><td className="mono">{fmt(d.dtMin, 0)} min</td><td className="mono">{fmt(d.kernel)}</td><td><button className="btn btn-xs" disabled={busy} onClick={() => act(item.id, "merge", { targetId: d.id })}>merge into #{d.id}</button></td></tr>)}</tbody></table></Panel>}
+          <Panel title="Lifecycle action">
+            <div className="grid grid-cols-2 gap-1 mb-1"><select className="inp" defaultValue="" onChange={(e) => e.target.value && act(item.id, "edit", { severityId: Number(e.target.value) })}><option value="">Edit severity…</option>{net?.severities.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select><select className="inp" defaultValue="" onChange={(e) => e.target.value && act(item.id, "edit", { categoryId: Number(e.target.value) })}><option value="">Edit type…</option>{net?.categories.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select></div>
+            <input className="inp mb-1" placeholder="Review notes (stored with verification record)" value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <div className="flex gap-1"><button className="btn btn-primary flex-1" disabled={busy} onClick={() => act(item.id, "verify")}>Verify</button><button className="btn flex-1" disabled={busy} onClick={() => act(item.id, "flag")}>Flag</button><button className="btn flex-1" style={{ borderColor: "var(--bad)" }} disabled={busy} onClick={() => act(item.id, "reject")}>Reject</button></div>
+            {msg && <div className="mt-1 text-[11px]" style={{ color: "var(--accent)" }}>{msg}</div>}
+          </Panel>
+        </>}
+      </aside>
+    </div>
+  );
+}
