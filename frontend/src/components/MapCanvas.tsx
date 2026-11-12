@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
+import { escapeHtml, safeHexColor } from '../utils/html';
 import {
   BoxSelect,
   Crosshair,
@@ -660,17 +661,17 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             const html = `
               <div style="background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;padding:10px 12px;font-size:11px;min-width:235px;font-family:Inter,sans-serif;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                  <span style="font-weight:700;color:${p.color || '#38bdf8'};">${p.severity_label || p.severity_code}</span>
-                  <span style="font-family:monospace;font-size:10px;color:#94a3b8;">#${p.id} · ${p.verification_status}</span>
+                  <span style="font-weight:700;color:${safeHexColor(p.color)};">${escapeHtml(p.severity_label || p.severity_code)}</span>
+                  <span style="font-family:monospace;font-size:10px;color:#94a3b8;">#${escapeHtml(p.id)} · ${escapeHtml(p.verification_status)}</span>
                 </div>
-                <div style="font-weight:600;margin-bottom:4px;">${p.category_label || p.category_code}</div>
-                <div style="color:#cbd5e1;margin-bottom:6px;">Corridor: <b>${p.segment_name || 'N/A'}</b> (LRS m=${p.linear_offset_m}m)</div>
+                <div style="font-weight:600;margin-bottom:4px;">${escapeHtml(p.category_label || p.category_code)}</div>
+                <div style="color:#cbd5e1;margin-bottom:6px;">Corridor: <b>${escapeHtml(p.segment_name || 'N/A')}</b> (LRS m=${escapeHtml(p.linear_offset_m)}m)</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-family:monospace;font-size:10px;color:#94a3b8;border-top:1px solid #1e293b;padding-top:6px;">
-                  <div>EPDO: <b style="color:#f8fafc">${p.epdo_weight}</b></div>
-                  <div>Credibility: <b style="color:#10b981">${p.vgi_credibility_score}</b></div>
-                  <div>Snap d⊥: <b>${p.orthogonal_snap_dist_m}m</b></div>
-                  <div>Witnesses: <b>${p.witness_count}</b></div>
-                  <div style="grid-column:span 2;">UTC: ${p.occurred_at_utc}</div>
+                  <div>EPDO: <b style="color:#f8fafc">${escapeHtml(p.epdo_weight)}</b></div>
+                  <div>Credibility: <b style="color:#10b981">${escapeHtml(p.vgi_credibility_score)}</b></div>
+                  <div>Snap d⊥: <b>${escapeHtml(p.orthogonal_snap_dist_m)}m</b></div>
+                  <div>Witnesses: <b>${escapeHtml(p.witness_count)}</b></div>
+                  <div style="grid-column:span 2;">UTC: ${escapeHtml(p.occurred_at_utc)}</div>
                 </div>
               </div>
             `;
@@ -693,19 +694,19 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               onSelectSegmentRef.current(sid);
               const extraMetric =
                 rp.eb_expected_crashes !== undefined
-                  ? `<div>EB Expected: <b style="color:#38bdf8">${rp.eb_expected_crashes}</b> (PSI: ${rp.psi_excess_crashes})</div>
-                     <div>Epistemic U: <b style="color:#f59e0b">${rp.epistemic_uncertainty}</b> [${rp.bivariate_class}]</div>`
+                  ? `<div>EB Expected: <b style="color:#38bdf8">${escapeHtml(rp.eb_expected_crashes)}</b> (PSI: ${escapeHtml(rp.psi_excess_crashes)})</div>
+                     <div>Epistemic U: <b style="color:#f59e0b">${escapeHtml(rp.epistemic_uncertainty)}</b> [${escapeHtml(rp.bivariate_class)}]</div>`
                   : rp.nkde_density !== undefined
-                  ? `<div>NKDE: <b style="color:#fca50a">${rp.nkde_density}/km</b> · Planar: ${rp.planar_density}/km</div>
-                     <div>Planar Bias Δ: <b style="color:#f87171">${rp.planar_bias}</b></div>`
+                  ? `<div>NKDE: <b style="color:#fca50a">${escapeHtml(rp.nkde_density)}/km</b> · Planar: ${escapeHtml(rp.planar_density)}/km</div>
+                     <div>Planar Bias Δ: <b style="color:#f87171">${escapeHtml(rp.planar_bias)}</b></div>`
                   : rp.gi_star_z !== undefined
-                  ? `<div>Gi* Z: <b style="color:#ef4444">${rp.gi_star_z}</b> (p=${rp.pseudo_p}, FDR q=${rp.fdr_q})</div>`
+                  ? `<div>Gi* Z: <b style="color:#ef4444">${escapeHtml(rp.gi_star_z)}</b> (p=${escapeHtml(rp.pseudo_p)}, FDR q=${escapeHtml(rp.fdr_q)})</div>`
                   : '';
               const html = `
                 <div style="background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;padding:10px 12px;font-size:11px;min-width:230px;">
-                  <div style="font-weight:700;color:#22d3ee;margin-bottom:2px;">${rp.name || rp.segment_name || `Segment #${sid}`}</div>
+                  <div style="font-weight:700;color:#22d3ee;margin-bottom:2px;">${escapeHtml(rp.name || rp.segment_name || `Segment #${sid}`)}</div>
                   <div style="font-family:monospace;font-size:10px;color:#94a3b8;margin-bottom:6px;">
-                    Class: ${rp.road_class} · Elev: L${rp.elevation_level ?? 0} · Len: ${rp.length_m}m
+                    Class: ${escapeHtml(rp.road_class)} · Elev: L${escapeHtml(rp.elevation_level ?? 0)} · Len: ${escapeHtml(rp.length_m)}m
                   </div>
                   <div style="font-family:monospace;font-size:10px;color:#cbd5e1;display:grid;gap:3px;">
                     ${extraMetric}
