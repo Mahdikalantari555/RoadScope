@@ -105,6 +105,11 @@ def submit_citizen_vgi_report(
         "SELECT id, trust_weight FROM users WHERE role = 'citizen_reporter' ORDER BY id LIMIT 1"
     ).fetchone()
     reporter_id = int(user_row["id"]) if user_row else 2
+    from ..security import identity
+
+    principal = identity.get()
+    if principal and principal.user_id is not None:
+        reporter_id = principal.user_id
     reporter_trust = float(user_row["trust_weight"]) if user_row else 0.72
 
     cands = compute_topological_snap_candidates(
@@ -469,14 +474,21 @@ def merge_duplicate_cluster(
     all_ids = [int(canonical_id)] + child_ids
     placeholders = ",".join("?" for _ in all_ids)
     rows = conn.execute(
-        f"SELECT id, verification_status, witness_count, snap_probability, reporting_lag_min, observational_radius_m FROM accidents WHERE id IN ({placeholders})",
+        f"SELECT id, dataset_id, verification_status, witness_count, snap_probability, reporting_lag_min, observational_radius_m FROM accidents WHERE id IN ({placeholders})",
         all_ids,
     ).fetchall()
     if len(rows) != len(all_ids):
         raise ValueError("One or more specified accident IDs do not exist.")
+    if len({r["dataset_id"] for r in rows}) != 1 or any(r["verification_status"] == "merged_duplicate" for r in rows):
+        raise ValueError("Cannot merge across datasets or re-merge a duplicate.")
 
     steward_row = conn.execute("SELECT id FROM users WHERE role = 'data_steward' LIMIT 1").fetchone()
     steward_id = int(steward_row["id"]) if steward_row else 4
+    from ..security import identity
+
+    principal = identity.get()
+    if principal and principal.user_id is not None:
+        steward_id = principal.user_id
     now = utc_now_iso()
 
     total_witnesses = sum(int(r["witness_count"]) for r in rows)
@@ -586,6 +598,11 @@ def steward_review_incident(
 
     steward_row = conn.execute("SELECT id FROM users WHERE role = 'data_steward' LIMIT 1").fetchone()
     steward_id = int(steward_row["id"]) if steward_row else 4
+    from ..security import identity
+
+    principal = identity.get()
+    if principal and principal.user_id is not None:
+        steward_id = principal.user_id
     now = utc_now_iso()
 
     prev_status = str(acc["verification_status"])

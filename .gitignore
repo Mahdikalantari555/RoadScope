@@ -17,3 +17,11 @@ __pycache__/
 .config/
 .sudo_as_admin_successful
 .DS_Store
+
+# Runtime SQLite journals, backups, and reproducible frontend build artifacts
+*.sqlite-*
+*.sqlite.bak
+*.sqlite.*.bak
+**/backups/*.sqlite
+frontend/static_bundle/
+*.tsbuildinfo

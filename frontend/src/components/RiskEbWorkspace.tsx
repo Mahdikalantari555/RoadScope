@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, RefreshCw, ShieldAlert, SlidersHorizontal } from 'lucide-react';
+import { AlertTriangle, Calculator, RefreshCw, ShieldAlert, SlidersHorizontal } from 'lucide-react';
 import { uaiApi } from '../api/client';
+import { useLanguage } from '../i18n';
+import { getRiskEbText } from '../workspaceI18n';
+import { CureChart } from './CureChart';
 import type { MapOverlayMode, RiskEbPayload } from '../types/uai';
 
 interface RiskEbWorkspaceProps {
@@ -13,17 +16,6 @@ interface RiskEbWorkspaceProps {
   onFlyToSegment: (segmentId: number) => void;
 }
 
-const METRIC_BUTTONS: { mode: MapOverlayMode; short: string; desc: string }[] = [
-  { mode: 'risk_bivariate_uncertainty', short: '3×3 Bivariate', desc: 'EB Risk × Epistemic U' },
-  { mode: 'risk_eb_expected', short: 'EB Expected', desc: 'RTM Smoothed N_EB' },
-  { mode: 'risk_psi', short: 'PSI Excess', desc: 'N_EB − μ_SPF' },
-  { mode: 'risk_mcda', short: 'MCDA Index', desc: 'Composite (0-100)' },
-  { mode: 'risk_raw_n', short: 'Tier 1: N', desc: 'Raw Frequency' },
-  { mode: 'risk_linear_density', short: 'Tier 2: N/km', desc: 'Linear Density' },
-  { mode: 'risk_epdo', short: 'Tier 3: EPDO', desc: 'Severity Weighted' },
-  { mode: 'risk_mvkt', short: 'Tier 4: MVKT', desc: 'Per Million VKT' },
-];
-
 export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
   darkMode,
   datasetId,
@@ -33,23 +25,37 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
   onRiskDataLoaded,
   onFlyToSegment,
 }) => {
-  const [wEb, setWEb] = useState(0.40);
-  const [wEpdo, setWEpdo] = useState(0.30);
+  const { language } = useLanguage();
+  const copy = getRiskEbText(language);
+
+  const [wEb, setWEb] = useState(0.4);
+  const [wEpdo, setWEpdo] = useState(0.3);
   const [wGeom, setWGeom] = useState(0.15);
   const [wEnv, setWEnv] = useState(0.15);
   const [loading, setLoading] = useState(false);
 
+  // Posterior EVPI Decision Calculator state
+  const [installCostK, setInstallCostK] = useState(45);
+  const [cmfPct, setCmfPct] = useState(28);
+  const [crashCostK, setCrashCostK] = useState(22);
+  const [evpiResult, setEvpiResult] = useState<Record<string, any> | null>(null);
+  const [surrogates, setSurrogates] = useState<Record<string, any> | null>(null);
+
   const recompute = async (eb = wEb, ep = wEpdo, gm = wGeom, ev = wEnv) => {
     setLoading(true);
     try {
-      const res = await uaiApi.evaluateRiskEb({
-        dataset_id: datasetId,
-        w_eb_risk: eb,
-        w_epdo_severity: ep,
-        w_geometric_hazard: gm,
-        w_environmental_cov: ev,
-      });
+      const [res, surr] = await Promise.all([
+        uaiApi.evaluateRiskEb({
+          dataset_id: datasetId,
+          w_eb_risk: eb,
+          w_epdo_severity: ep,
+          w_geometric_hazard: gm,
+          w_environmental_cov: ev,
+        }),
+        uaiApi.getSurrogates(datasetId).catch(() => null),
+      ]);
       onRiskDataLoaded(res);
+      setSurrogates(surr);
     } finally {
       setLoading(false);
     }
@@ -58,6 +64,44 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
   useEffect(() => {
     recompute();
   }, [datasetId]);
+
+  const computeEvpiDecision = async () => {
+    const top = riskData?.ranked_corridors?.[0];
+    if (!top) return;
+    const mean = Math.max(0.2, top.eb_expected_crashes);
+    const sd = Math.max(0.15, top.eb_se);
+    // Deterministic quantile grid over Gamma posterior matching (mean, sd)
+    const shape = (mean / sd) ** 2;
+    const scale = (sd ** 2) / mean;
+    const zQuantiles = [-1.64, -1.04, -0.52, 0.0, 0.52, 1.04, 1.64, 2.33];
+    const reduction = Math.min(0.9, Math.max(0.01, cmfPct / 100));
+    const losses = zQuantiles.map((z) => {
+      // Wilson-Hilferty gamma quantile approximation
+      const wh = Math.max(0.05, 1 - 1 / (9 * shape) + z / (3 * Math.sqrt(shape))) ** 3;
+      const lambdaDraw = shape * scale * wh;
+      const lossDoNothing = lambdaDraw * crashCostK;
+      const lossTreat = installCostK + lambdaDraw * (1 - reduction) * crashCostK;
+      return [Number(lossDoNothing.toFixed(3)), Number(lossTreat.toFixed(3))];
+    });
+    const res = await uaiApi.runResearchEvpi({
+      losses,
+      actions: ['do_nothing', 'install_countermeasure'],
+      loss_unit: 'kEUR_per_year',
+      horizon_years: 1.0,
+    });
+    setEvpiResult({ ...res, corridorName: top.name });
+  };
+
+  const metricButtons: { mode: MapOverlayMode; short: string; desc: string }[] = [
+    { mode: 'risk_bivariate_uncertainty', short: copy.mBiv, desc: copy.mBivDesc },
+    { mode: 'risk_eb_expected', short: copy.mEb, desc: copy.mEbDesc },
+    { mode: 'risk_psi', short: copy.mPsi, desc: copy.mPsiDesc },
+    { mode: 'risk_mcda', short: copy.mMcda, desc: copy.mMcdaDesc },
+    { mode: 'risk_raw_n', short: copy.mRaw, desc: copy.mRawDesc },
+    { mode: 'risk_linear_density', short: copy.mLin, desc: copy.mLinDesc },
+    { mode: 'risk_epdo', short: copy.mEpdo, desc: copy.mEpdoDesc },
+    { mode: 'risk_mvkt', short: copy.mMvkt, desc: copy.mMvktDesc },
+  ];
 
   const cardCls = `rounded-md border p-3 ${
     darkMode ? 'bg-slate-900/75 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
@@ -69,26 +113,25 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
         <div>
           <h2 className="font-semibold text-sm flex items-center gap-1.5">
             <ShieldAlert className="w-4 h-4 text-amber-400" />
-            Exposure-Aware Safety &amp; Empirical Bayes Engine
+            {copy.title}
           </h2>
-          <p className="text-[11px] opacity-70">
-            NB-SPF Prior Calibration · RTM Correction · Epistemic Uncertainty Cartography
-          </p>
+          <p className="text-[11px] opacity-70">{copy.subtitle}</p>
         </div>
         {loading && <RefreshCw className="w-4 h-4 animate-spin text-cyan-400" />}
       </div>
 
-      {/* Multi-Tiered Safety & Risk Map Layer Selector (US-5.1, US-5.2, US-5.4) */}
+      {/* Multi-Tiered Safety & Risk Map Layer Selector */}
       <div className={cardCls}>
-        <div className="font-semibold mb-2">Select Active Cartographic Safety Metric</div>
+        <div className="font-semibold mb-2">{copy.selectMetric}</div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-          {METRIC_BUTTONS.map((btn) => {
+          {metricButtons.map((btn) => {
             const active = overlayMode === btn.mode;
             return (
               <button
+                type="button"
                 key={btn.mode}
                 onClick={() => onChangeOverlay(btn.mode)}
-                className={`p-1.5 rounded border text-left transition-colors ${
+                className={`p-1.5 rounded border text-start transition-colors ${
                   active
                     ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
                     : 'border-slate-800 hover:border-slate-700 opacity-85'
@@ -102,72 +145,113 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
         </div>
       </div>
 
-      {/* Multi-Criteria Vulnerability Sensitivity Sliders + Epistemological Guardrail (US-5.3) */}
+      {/* Multi-Criteria Vulnerability Sensitivity Sliders */}
       <div className={cardCls}>
         <div className="flex items-center justify-between mb-2">
           <span className="font-semibold flex items-center gap-1.5">
             <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-400" />
-            Multi-Criteria Vulnerability Weights (Sensitivity)
+            {copy.weightsTitle}
           </span>
           <button
+            type="button"
             onClick={() => recompute(wEb, wEpdo, wGeom, wEnv)}
             className="px-2 py-0.5 rounded bg-cyan-500 text-slate-950 font-semibold text-[11px]"
           >
-            Apply Sliders
+            {copy.applySliders}
           </button>
         </div>
 
         <div className="grid grid-cols-2 gap-2.5 font-mono text-[11px]">
           <div>
-            <div className="flex justify-between"><span>EB Expected Risk</span><b>{wEb.toFixed(2)}</b></div>
-            <input type="range" min={0} max={1} step={0.05} value={wEb} onChange={(e) => setWEb(Number(e.target.value))} className="w-full accent-cyan-400" />
+            <div className="flex justify-between">
+              <span className="font-sans">{copy.wEbLabel}</span>
+              <b>{wEb.toFixed(2)}</b>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={wEb}
+              onChange={(e) => setWEb(Number(e.target.value))}
+              className="w-full accent-cyan-400"
+            />
           </div>
           <div>
-            <div className="flex justify-between"><span>EPDO Severity</span><b>{wEpdo.toFixed(2)}</b></div>
-            <input type="range" min={0} max={1} step={0.05} value={wEpdo} onChange={(e) => setWEpdo(Number(e.target.value))} className="w-full accent-amber-400" />
+            <div className="flex justify-between">
+              <span className="font-sans">{copy.wEpdoLabel}</span>
+              <b>{wEpdo.toFixed(2)}</b>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={wEpdo}
+              onChange={(e) => setWEpdo(Number(e.target.value))}
+              className="w-full accent-amber-400"
+            />
           </div>
           <div>
-            <div className="flex justify-between"><span>Road Geometry</span><b>{wGeom.toFixed(2)}</b></div>
-            <input type="range" min={0} max={1} step={0.05} value={wGeom} onChange={(e) => setWGeom(Number(e.target.value))} className="w-full accent-emerald-400" />
+            <div className="flex justify-between">
+              <span className="font-sans">{copy.wGeomLabel}</span>
+              <b>{wGeom.toFixed(2)}</b>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={wGeom}
+              onChange={(e) => setWGeom(Number(e.target.value))}
+              className="w-full accent-emerald-400"
+            />
           </div>
           <div>
-            <div className="flex justify-between"><span>Adverse Weather</span><b>{wEnv.toFixed(2)}</b></div>
-            <input type="range" min={0} max={1} step={0.05} value={wEnv} onChange={(e) => setWEnv(Number(e.target.value))} className="w-full accent-purple-400" />
+            <div className="flex justify-between">
+              <span className="font-sans">{copy.wEnvLabel}</span>
+              <b>{wEnv.toFixed(2)}</b>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={wEnv}
+              onChange={(e) => setWEnv(Number(e.target.value))}
+              className="w-full accent-purple-400"
+            />
           </div>
         </div>
 
         {riskData && (
           <div className="mt-2 p-2 rounded border border-amber-500/35 bg-amber-500/10 text-amber-200 text-[10px] flex items-start gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
-            <span>{riskData.metric_epistemology_disclaimer}</span>
+            <span dir="auto">{riskData.metric_epistemology_disclaimer}</span>
           </div>
         )}
       </div>
 
-      {/* Empirical Bayes RTM Shrinkage Visualization */}
       {riskData && (
         <>
           <div className={cardCls}>
-            <div className="font-semibold mb-1.5">
-              Regression-to-the-Mean (RTM) Shrinkage: Observed N vs. SPF μ vs. Posterior N_EB
-            </div>
-            <p className="text-[10px] opacity-70 mb-2">
-              Segments where random short-term spikes (Observed N) shrink toward Road-Class Negative Binomial SPF Prior (μ_e):
-            </p>
+            <div className="font-semibold mb-1.5">{copy.rtmTitle}</div>
+            <p className="text-[10px] opacity-70 mb-2">{copy.rtmSubtitle}</p>
             <div className="space-y-2 font-mono text-[10px]">
-              {riskData.ranked_corridors.slice(0, 6).map((c) => {
+              {riskData.ranked_corridors.slice(0, 5).map((c) => {
                 const maxVal = Math.max(15, c.eb_ci95_high, c.raw_crash_frequency, c.spf_prior_expected);
                 return (
                   <div key={c.segment_id} className="space-y-0.5">
                     <div className="flex justify-between">
-                      <span className="font-sans font-medium truncate max-w-[200px]">{c.name}</span>
-                      <span>
-                        Obs <b>{c.raw_crash_frequency}</b> → EB <b className="text-cyan-400">{c.eb_expected_crashes}</b>{' '}
-                        (w={c.eb_weight_w}, PSI={c.psi_excess_crashes > 0 ? `+${c.psi_excess_crashes}` : c.psi_excess_crashes})
+                      <span className="font-sans font-medium truncate max-w-[190px]">
+                        <bdi>{c.name}</bdi>
+                      </span>
+                      <span dir="ltr">
+                        N=<b>{c.raw_crash_frequency}</b> → EB{' '}
+                        <b className="text-cyan-400">{c.eb_expected_crashes}</b> (w={c.eb_weight_w})
                       </span>
                     </div>
-                    <div className="relative h-3 bg-slate-800 rounded overflow-hidden">
-                      {/* 95% Credible Interval Band */}
+                    <div dir="ltr" className="relative h-3 bg-slate-800 rounded overflow-hidden">
                       <div
                         className="absolute top-0.5 bottom-0.5 bg-cyan-400/25 rounded"
                         style={{
@@ -175,19 +259,16 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
                           width: `${Math.max(2, ((c.eb_ci95_high - c.eb_ci95_low) / maxVal) * 100)}%`,
                         }}
                       />
-                      {/* SPF Prior Marker */}
                       <div
                         title={`SPF Prior μ = ${c.spf_prior_expected}`}
                         className="absolute top-0 bottom-0 w-1 bg-slate-400"
                         style={{ left: `${(c.spf_prior_expected / maxVal) * 100}%` }}
                       />
-                      {/* Observed N Marker */}
                       <div
                         title={`Observed N = ${c.raw_crash_frequency}`}
                         className="absolute top-0 bottom-0 w-1.5 bg-rose-400"
                         style={{ left: `${(c.raw_crash_frequency / maxVal) * 100}%` }}
                       />
-                      {/* EB Expected Posterior Marker */}
                       <div
                         title={`EB Posterior = ${c.eb_expected_crashes}`}
                         className="absolute top-0 bottom-0 w-1.5 bg-cyan-300"
@@ -197,33 +278,146 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
                   </div>
                 );
               })}
-              <div className="flex justify-between pt-1 text-[9px] opacity-75">
-                <span>■ Grey = NB-SPF Prior (μ)</span>
-                <span className="text-cyan-300">■ Cyan = EB Posterior ± 95% CI</span>
-                <span className="text-rose-400">■ Red = Raw Observed (N)</span>
+              <div className="flex justify-between pt-1 text-[9px] opacity-75 font-sans">
+                <span>{copy.legendPrior}</span>
+                <span className="text-cyan-300">{copy.legendPost}</span>
+                <span className="text-rose-400">{copy.legendRaw}</span>
               </div>
             </div>
           </div>
 
+          {riskData.cure_diagnostic && (
+            <div className={cardCls}>
+              <CureChart diagnostic={riskData.cure_diagnostic} />
+            </div>
+          )}
+
+          {/* Fitted Length-Scaled NB-SPF Comparison */}
+          {riskData.length_scaled_eb && (
+            <div className={`${cardCls} space-y-2`}>
+              <div className="font-semibold text-cyan-300">{copy.lengthSpfTitle}</div>
+              <div dir="ltr" className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[10.5px]">
+                <div>
+                  β₀: <b>{riskData.length_scaled_eb.beta_0 ?? '—'}</b>
+                </div>
+                <div>
+                  β₁(ln AADT): <b>{riskData.length_scaled_eb.beta_1_log_aadt ?? '—'}</b>
+                </div>
+                <div>
+                  α₁(/km): <b>{riskData.length_scaled_eb.alpha_1_per_km ?? '—'}</b>
+                </div>
+                <div>
+                  ρ vs Legacy: <b>{riskData.length_scaled_eb.rank_spearman_vs_legacy ?? '—'}</b>
+                </div>
+              </div>
+              <p className="text-[10px] opacity-75" dir="auto">
+                {riskData.length_scaled_eb.limitations}
+              </p>
+            </div>
+          )}
+
+          {/* Interactive Posterior EVPI Decision-Support Calculator */}
+          <div className={`${cardCls} space-y-2`}>
+            <div className="font-semibold flex items-center gap-1.5 text-emerald-300">
+              <Calculator className="w-3.5 h-3.5" />
+              {copy.evpiTitle}
+            </div>
+            <p className="text-[10px] opacity-75">{copy.evpiDesc}</p>
+            <div className="grid grid-cols-3 gap-2 font-mono text-[10.5px]">
+              <div>
+                <label className="block text-[9.5px] font-sans opacity-75 mb-0.5">{copy.costInstall}</label>
+                <input
+                  dir="ltr"
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={installCostK}
+                  onChange={(e) => setInstallCostK(Number(e.target.value))}
+                  className="w-full px-1.5 py-1 rounded border border-slate-700 bg-slate-950"
+                />
+              </div>
+              <div>
+                <label className="block text-[9.5px] font-sans opacity-75 mb-0.5">{copy.cmfReduction}</label>
+                <input
+                  dir="ltr"
+                  type="number"
+                  min={1}
+                  max={85}
+                  value={cmfPct}
+                  onChange={(e) => setCmfPct(Number(e.target.value))}
+                  className="w-full px-1.5 py-1 rounded border border-slate-700 bg-slate-950"
+                />
+              </div>
+              <div>
+                <label className="block text-[9.5px] font-sans opacity-75 mb-0.5">{copy.crashUnitCost}</label>
+                <input
+                  dir="ltr"
+                  type="number"
+                  min={1}
+                  max={1000}
+                  value={crashCostK}
+                  onChange={(e) => setCrashCostK(Number(e.target.value))}
+                  className="w-full px-1.5 py-1 rounded border border-slate-700 bg-slate-950"
+                />
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={computeEvpiDecision}
+              className="w-full py-1.5 rounded bg-emerald-500/20 border border-emerald-400/60 hover:bg-emerald-500/30 text-emerald-200 font-semibold"
+            >
+              {copy.runEvpi}
+            </button>
+            {evpiResult && (
+              <div className="p-2 rounded bg-slate-950/80 border border-slate-800 font-mono text-[10.5px] flex items-center justify-between">
+                <span>
+                  <bdi>{evpiResult.corridorName}</bdi> → {copy.optimalAction}:{' '}
+                  <b className="text-emerald-300">{evpiResult.actions?.[evpiResult.optimal_action]}</b>
+                </span>
+                <span>
+                  {copy.evpiValue}: <b className="text-cyan-300">{evpiResult.evpi?.toFixed(2)} k€</b>
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Surrogate Safety Coverage Summary */}
+          {surrogates && (
+            <div className={`${cardCls} space-y-1.5`}>
+              <div className="font-semibold text-amber-300">{copy.surrogateTitle}</div>
+              <div className="grid grid-cols-3 gap-2 font-mono text-[10.5px]">
+                <div>
+                  {copy.uncoveredSegs}: <b>{surrogates.uncovered_segments}</b>
+                </div>
+                <div>
+                  {copy.zeroConflictSegs}: <b>{surrogates.covered_zero_conflict_segments}</b>
+                </div>
+                <div>
+                  {copy.posConflictSegs}: <b className="text-emerald-300">{surrogates.covered_positive_conflict_segments}</b>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Ranked Corridor Priority Table */}
           <div className={cardCls}>
             <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold">Ranked Corridor Priority Table</span>
+              <span className="font-semibold">{copy.rankedTitle}</span>
               <span className="text-[10px] font-mono opacity-70">
-                Imputed AADT: {riskData.network_summary.imputed_aadt_segments} segs
+                {copy.imputedCount}: {riskData.network_summary.imputed_aadt_segments}
               </span>
             </div>
             <div className="overflow-x-auto max-h-64">
-              <table className="w-full text-left border-collapse font-mono tabular-nums text-[10.5px]">
+              <table className="w-full text-start border-collapse font-mono tabular-nums text-[10.5px]">
                 <thead>
                   <tr className="border-b border-slate-800 text-[9.5px] uppercase opacity-70">
                     <th className="py-1">#</th>
-                    <th className="py-1">Corridor</th>
-                    <th className="py-1 text-right">N_EB</th>
-                    <th className="py-1 text-right">PSI</th>
-                    <th className="py-1 text-right">MVKT</th>
-                    <th className="py-1 text-right">MCDA</th>
-                    <th className="py-1 text-right">Biv</th>
+                    <th className="py-1 text-start">{copy.corridor}</th>
+                    <th className="py-1 text-end">N_EB</th>
+                    <th className="py-1 text-end">PSI</th>
+                    <th className="py-1 text-end">MVKT</th>
+                    <th className="py-1 text-end">MCDA</th>
+                    <th className="py-1 text-end">Biv</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -233,22 +427,28 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
                       onClick={() => onFlyToSegment(row.segment_id)}
                       className="border-b border-slate-800/40 cursor-pointer hover:bg-cyan-500/10"
                     >
-                      <td className="py-1 pr-1">{row.priority_rank}</td>
-                      <td className="py-1 pr-2 font-sans truncate max-w-[135px]" title={row.name}>
-                        {row.name}
+                      <td className="py-1 pe-1">{row.priority_rank}</td>
+                      <td className="py-1 pe-2 font-sans truncate max-w-[135px]" title={row.name}>
+                        <bdi>{row.name}</bdi>
                         {row.aadt_is_imputed && (
-                          <span className="ml-1 text-[9px] text-amber-400 font-mono" title="Imputed AADT Exposure">
+                          <span className="ms-1 text-[9px] text-amber-400 font-mono" title="Imputed AADT Exposure">
                             [Imp]
                           </span>
                         )}
                       </td>
-                      <td className="py-1 px-1 text-right text-cyan-300 font-semibold">{row.eb_expected_crashes}</td>
-                      <td className={`py-1 px-1 text-right ${row.psi_excess_crashes > 0 ? 'text-rose-400' : 'text-blue-400'}`}>
-                        {row.psi_excess_crashes > 0 ? `+${row.psi_excess_crashes}` : row.psi_excess_crashes}
+                      <td className="py-1 px-1 text-end text-cyan-300 font-semibold">{row.eb_expected_crashes}</td>
+                      <td
+                        className={`py-1 px-1 text-end ${
+                          row.psi_excess_crashes > 0 ? 'text-rose-400' : 'text-blue-400'
+                        }`}
+                      >
+                        <bdi dir="ltr">
+                          {row.psi_excess_crashes > 0 ? `+${row.psi_excess_crashes}` : row.psi_excess_crashes}
+                        </bdi>
                       </td>
-                      <td className="py-1 px-1 text-right">{row.exposure_mvkt_rate}</td>
-                      <td className="py-1 px-1 text-right font-bold">{row.mcda_vulnerability_index}</td>
-                      <td className="py-1 pl-1 text-right">
+                      <td className="py-1 px-1 text-end">{row.exposure_mvkt_rate}</td>
+                      <td className="py-1 px-1 text-end font-bold">{row.mcda_vulnerability_index}</td>
+                      <td className="py-1 ps-1 text-end">
                         <span
                           className="px-1 py-0.5 rounded text-[9px] text-slate-950 font-bold"
                           style={{ backgroundColor: row.bivariate_color }}

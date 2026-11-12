@@ -11,22 +11,32 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(scope="module")
 def test_client() -> TestClient:
-    tmp_dir = tempfile.mkdtemp(prefix="uai_test_")
-    db_file = Path(tmp_dir) / "test_uai.sqlite"
-    os.environ["UAI_SQLITE_PATH"] = str(db_file)
+    with tempfile.TemporaryDirectory(prefix="roadscope_test_") as tmp_dir:
+        db_file = Path(tmp_dir) / "test.sqlite"
+        env = pytest.MonkeyPatch()
+        env.setenv("ROADSCOPE_DEMO_MODE", "true")
+        env.setenv("ROADSCOPE_SQLITE_PATH", str(db_file))
+        env.setenv("UAI_SQLITE_PATH", str(db_file))
+        env.setenv("ROADSCOPE_CANONICAL_EPSG", "25832")
+        env.setenv("ROADSCOPE_WEB_EPSG", "4326")
+        env.setenv("ROADSCOPE_DEFAULT_SEED", "42")
 
-    # Reload config/db modules against isolated test DB
-    import importlib
-    import app.config as cfg
-    import app.db as db_mod
-    import app.main as main_mod
+        import importlib
+        import app.config as cfg
+        import app.db as db_mod
+        import app.main as main_mod
 
-    importlib.reload(cfg)
-    importlib.reload(db_mod)
-    importlib.reload(main_mod)
-
-    with TestClient(main_mod.app) as client:
-        yield client
+        try:
+            importlib.reload(cfg)
+            importlib.reload(db_mod)
+            importlib.reload(main_mod)
+            with TestClient(main_mod.app) as client:
+                yield client
+        finally:
+            env.undo()
+            importlib.reload(cfg)
+            importlib.reload(db_mod)
+            importlib.reload(main_mod)
 
 
 def test_health_and_dual_crs_meta(test_client: TestClient) -> None:
@@ -42,6 +52,30 @@ def test_health_and_dual_crs_meta(test_client: TestClient) -> None:
     assert meta["active_dataset"]["crs_epsg"] == 25832
     assert len(meta["categories"]) >= 7
     assert len(meta["severities"]) == 4
+
+
+def test_directed_network_topology_api(test_client: TestClient) -> None:
+    result = test_client.get("/api/v1/network/directed-topology").json()
+    assert result["state_count"] > 0
+    assert result["transition_count"] > 0
+    assert result["assumed_bidirectional_segments"] > 0
+    assert "not implemented" in result["status"]
+    details = test_client.get("/api/v1/network/directed-topology?include_edges=true").json()
+    assert len(details["states"]) == result["state_count"]
+    assert len(details["transitions"]) == result["transition_count"]
+    layers = test_client.get("/api/v1/network/layers?include_lixels=false").json()
+    first = layers["segments_geojson"]["features"][0]["properties"]
+    assert first["oneway_direction"] == 0
+    assert first["direction_source"] == "assumed_bidirectional"
+    initial = details["states"][0]
+    response = test_client.post("/api/v1/network/directed-transport", json={**initial, "mass": 2, "duration_s": 10})
+    assert response.status_code == 200, response.text
+    transport = response.json()
+    assert transport["final_mass"] == pytest.approx(2)
+    assert transport["topology_version"] == result["topology_version"]
+    assert transport["status"].startswith("experimental")
+    invalid = test_client.post("/api/v1/network/directed-transport", json={**initial, "speed_m_s": 0})
+    assert invalid.status_code == 422
 
 
 def test_crs_roundtrip_projection(test_client: TestClient) -> None:
@@ -240,6 +274,10 @@ def test_nkde_mass_conservation_and_ground_truth_benchmark(test_client: TestClie
     assert math.isclose(sm["total_weighted_mass"], sm["conserved_nkde_mass"], rel_tol=1e-3)
     assert body["ground_truth_eval"] is not None
     assert body["ground_truth_eval"]["nkde"]["pai"] > 1.0
+    curve = body["ground_truth_eval"]["nkde"]["pai_curve"]
+    assert curve["status"] == "ok"
+    assert curve["points"][-1]["pai"] == pytest.approx(1.0)
+    assert "not held-out" in curve["evaluation_scope"]
 
     # Export job as GeoJSON & CSV
     job_id = body["job_id"]
@@ -288,6 +326,10 @@ def test_empirical_bayes_rtm_smoothing_and_cmv_cross_filtering(test_client: Test
     assert eb_res.status_code == 200
     eb_data = eb_res.json()
     assert "NOT a calibrated crash probability" in eb_data["metric_epistemology_disclaimer"]
+    cure = eb_data["cure_diagnostic"]
+    assert cure["status"] == "ok"
+    assert cure["points"][-1]["segment_count"] == eb_data["network_summary"]["segment_count"]
+    assert "not a simultaneous" in cure["assumptions"].lower()
     corridors = eb_data["ranked_corridors"]
     assert len(corridors) > 30
 
@@ -348,8 +390,13 @@ def test_duplicate_cluster_merge_and_seeded_simulation(test_client: TestClient) 
     assert sim_res.status_code == 200
     assert sim_res.json()["lixel_resolution_m"] == 50.0
 
-    # Verify compiled React/MapLibre SPA bundle is served at root
+    # Verify compiled React/MapLibre SPA bundle is served at root when built
+    from app.config import FRONTEND_DIST_DIR
+
     spa = test_client.get("/")
-    assert spa.status_code == 200
-    assert "RoadScope" in spa.text
+    if (FRONTEND_DIST_DIR / "index.html").exists():
+        assert spa.status_code == 200
+        assert "RoadScope" in spa.text
+    else:
+        assert spa.status_code == 404
 

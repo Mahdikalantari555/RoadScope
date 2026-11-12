@@ -19,6 +19,7 @@ export type MapOverlayMode =
   | 'nkde'
   | 'planar_kde'
   | 'planar_bias'
+  | 'tnkde'
   | 'true_lambda'
   | 'gi_star'
   | 'ndbscan'
@@ -250,8 +251,41 @@ export interface RiskCorridorRow {
   bivariate_color: string;
 }
 
+export interface CureDiagnostic {
+  status: 'ok' | 'insufficient_aadt_variation';
+  method: string;
+  envelope: string;
+  assumptions: string;
+  model: string;
+  sample_size: number;
+  imputed_aadt_count: number;
+  unit: string;
+  points: { aadt: number; segment_count: number; cumulative_residual: number; lower: number; upper: number }[];
+}
+
+export interface LengthScaledEbSummary {
+  status: string;
+  model_version: string;
+  converged: boolean;
+  log_likelihood?: number;
+  beta_0: number | null;
+  beta_1_log_aadt: number | null;
+  alpha_1_per_km: number | null;
+  parameter_se?: {
+    beta_0_centered_se: number | null;
+    beta_1_log_aadt_se: number | null;
+    log_alpha_1_se: number | null;
+  };
+  mean_shrinkage_weight?: number;
+  rank_spearman_vs_legacy?: number | null;
+  cure_diagnostic: CureDiagnostic;
+  limitations: string;
+}
+
 export interface RiskEbPayload {
   crs_epsg: number;
+  cure_diagnostic: CureDiagnostic;
+  length_scaled_eb?: LengthScaledEbSummary;
   metric_epistemology_disclaimer: string;
   normalized_weights: {
     w_eb_risk: number;

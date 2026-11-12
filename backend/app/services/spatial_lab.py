@@ -19,6 +19,8 @@ from ..crs import (
     polygon_25832_to_geojson_dict,
 )
 from ..db import log_audit_event, utc_now_iso
+from .allocations import incident_distribution
+from .benchmark_curves import pai_curve
 from .network_generator import (
     LixelNetworkTopology,
     exact_network_distance_between_snapped_points,
@@ -121,6 +123,11 @@ def evaluate_against_ground_truth(
         "rmse_per_km_yr": round(float(rmse), 4),
         "nrmse": round(float(nrmse), 4),
         "spearman_rho": round(float(rho), 4),
+        "pai_curve": {
+            **pai_curve(estimated_intensity_per_km, lengths_m, true_expected_counts),
+            "event_mass_source": "synthetic expected intensity times lixel length",
+            "evaluation_scope": "in-sample synthetic ground truth; not held-out prediction",
+        },
     }
 
 
@@ -234,17 +241,21 @@ def run_nkde_analysis(
     weighting: str = "uniform",
     equal_split_mass_conserving: bool = True,
     include_unverified_vgi: bool = False,
+    allocation_mode: str = "hard",
     top_hotspot_pct: float = 0.15,
     actor_role: str = "gis_researcher",
 ) -> dict[str, Any]:
     """
     Network-Constrained KDE (NKDE) vs Planar Euclidean KDE across Lixels (US-4.1 & US-1.4):
     Computes exact shortest-path Lixel NKDE, Planar KDE comparison, Planar Distortion Bias
-    (Planar - NKDE), and quantitative Ground-Truth PAI/RRI/RMSE benchmarks for BOTH methods.
+    (Planar - NKDE), optional VGI fractional candidate propagation, and quantitative
+    Ground-Truth PAI/RRI/RMSE benchmarks for BOTH methods.
     """
     t0 = time.perf_counter()
     if bandwidth_m < 15.0 or bandwidth_m > 1500.0:
         raise ValueError("Bandwidth h_net must lie between 15m and 1500m.")
+    if allocation_mode not in ("hard", "fractional"):
+        raise ValueError("allocation_mode must be 'hard' or 'fractional'.")
 
     ds_row = conn.execute(
         "SELECT is_synthetic, study_period_years FROM dataset_sources WHERE id = ?", (dataset_id,)
@@ -263,11 +274,16 @@ def run_nkde_analysis(
     M = len(topo.lixel_ids)
     lengths_km = topo.lengths_m / 1000.0
 
-    # Aggregate incident weights onto host lixels
+    # Aggregate incident weights onto host lixels (hard winner vs fractional candidate distribution)
+    hard_lix_indices: list[int] = []
+    hard_weights: list[float] = []
     event_lix_indices: list[int] = []
     event_weights: list[float] = []
     event_x: list[float] = []
     event_y: list[float] = []
+    multi_candidate_incidents = 0
+    unavailable_support_incidents = 0
+    distinct_incident_count = 0
 
     for inc in incidents:
         lid = int(inc["snapped_lixel_id"])
@@ -280,39 +296,82 @@ def run_nkde_analysis(
             w = float(inc["vgi_credibility_score"])
         else:
             w = 1.0
-        event_lix_indices.append(idx)
-        event_weights.append(w)
+
+        hard_lix_indices.append(idx)
+        hard_weights.append(w)
         event_x.append(float(inc["snapped_x_m"]))
         event_y.append(float(inc["snapped_y_m"]))
+
+        if allocation_mode == "fractional":
+            dist = incident_distribution(conn, int(inc["id"]))
+            if dist["status"] != "available":
+                unavailable_support_incidents += 1
+                continue
+            valid_allocs = [
+                (topo.lixel_id_to_idx[int(a["lixel_id"])], float(a["probability"]))
+                for a in dist["allocations"]
+                if int(a["lixel_id"]) in topo.lixel_id_to_idx
+            ]
+            if not valid_allocs:
+                unavailable_support_incidents += 1
+                continue
+            p_sum = sum(p for _, p in valid_allocs)
+            if len(valid_allocs) > 1:
+                multi_candidate_incidents += 1
+            distinct_incident_count += 1
+            for cand_idx, prob in valid_allocs:
+                event_lix_indices.append(cand_idx)
+                event_weights.append(w * (prob / p_sum))
+        else:
+            distinct_incident_count += 1
+            event_lix_indices.append(idx)
+            event_weights.append(w)
+
+    if distinct_incident_count < 3:
+        raise ValueError("Insufficient supported incident sample size (N < 3) for kernel density estimation.")
 
     ev_idx_arr = np.array(event_lix_indices, dtype=np.int64)
     ev_w_arr = np.array(event_weights, dtype=np.float64)
     total_weight = float(np.sum(ev_w_arr))
 
-    # 1. Network KDE over shortest-path distances D_net[:, ev_idx_arr] (shape M x N)
-    d_net_sub = topo.dist_net_matrix[:, ev_idx_arr]
-    u_net = d_net_sub / float(bandwidth_m)
-    k_net = _kernel_eval(u_net, kernel)  # shape (M, N)
+    def _eval_nkde_vec(idx_arr: np.ndarray, w_arr: np.ndarray) -> np.ndarray:
+        d_sub = topo.dist_net_matrix[:, idx_arr]
+        k_sub = _kernel_eval(d_sub / float(bandwidth_m), kernel)
+        if equal_split_mass_conserving:
+            z_sub = np.maximum(np.sum(k_sub * lengths_km[:, None], axis=0), 1e-9)
+            return np.sum(k_sub * (w_arr[None, :] / z_sub[None, :]), axis=1) / period_yr
+        h_km_local = bandwidth_m / 1000.0
+        return np.sum(k_sub * w_arr[None, :], axis=1) / (h_km_local * period_yr)
 
-    if equal_split_mass_conserving:
-        # Diggle / Okabe-Sugihara mass-conserving 1D topological normalization:
-        # Z_i = sum_q K(d_net(q, s_i)/h) * length_km(q)
-        z_net = np.sum(k_net * lengths_km[:, None], axis=0)
-        z_net = np.maximum(z_net, 1e-9)
-        nkde_per_km_yr = np.sum(k_net * (ev_w_arr[None, :] / z_net[None, :]), axis=1) / period_yr
-    else:
-        h_km = bandwidth_m / 1000.0
-        nkde_per_km_yr = np.sum(k_net * ev_w_arr[None, :], axis=1) / (h_km * period_yr)
+    # 1. Network KDE over shortest-path distances
+    nkde_per_km_yr = _eval_nkde_vec(ev_idx_arr, ev_w_arr)
+
+    allocation_comparison = None
+    if allocation_mode == "fractional":
+        hard_nkde = _eval_nkde_vec(
+            np.array(hard_lix_indices, dtype=np.int64),
+            np.array(hard_weights, dtype=np.float64),
+        )
+        l1_shift = float(np.sum(np.abs(nkde_per_km_yr - hard_nkde) * lengths_km * period_yr))
+        allocation_comparison = {
+            "mode": "fractional",
+            "distinct_incidents": distinct_incident_count,
+            "multi_candidate_incidents": multi_candidate_incidents,
+            "unavailable_support_incidents": unavailable_support_incidents,
+            "max_abs_density_diff_per_km_yr": round(float(np.max(np.abs(nkde_per_km_yr - hard_nkde))), 4),
+            "l1_mass_shift_pct": round(100.0 * l1_shift / max(1e-9, total_weight), 3),
+        }
 
     # 2. Planar 2D Euclidean KDE evaluated at lixel midpoints (rescaled to equal total network crash mass)
     ev_x_arr = np.array(event_x, dtype=np.float64)
     ev_y_arr = np.array(event_y, dtype=np.float64)
+    hard_w_arr = np.array(hard_weights, dtype=np.float64)
     dx = topo.mid_x_m[:, None] - ev_x_arr[None, :]
     dy = topo.mid_y_m[:, None] - ev_y_arr[None, :]
     d_euc_sub = np.hypot(dx, dy)
     u_euc = d_euc_sub / float(bandwidth_m)
     k_euc = _kernel_eval(u_euc, kernel)
-    raw_planar = np.sum(k_euc * ev_w_arr[None, :], axis=1)
+    raw_planar = np.sum(k_euc * hard_w_arr[None, :], axis=1)
     planar_mass = float(np.sum(raw_planar * lengths_km))
     if planar_mass > 1e-9:
         planar_per_km_yr = (raw_planar * (total_weight / planar_mass)) / period_yr
@@ -403,13 +462,16 @@ def run_nkde_analysis(
 
     summary = {
         "lixel_count": M,
-        "incident_sample_size": len(ev_idx_arr),
+        "incident_sample_size": distinct_incident_count,
+        "allocation_mode": allocation_mode,
         "total_weighted_mass": round(total_weight, 2),
         "conserved_nkde_mass": round(float(np.sum(nkde_per_km_yr * lengths_km * period_yr)), 2),
         "max_nkde_per_km_yr": round(float(np.max(nkde_per_km_yr)), 3),
         "max_planar_overestimation": round(float(np.max(planar_bias)), 3),
         "mean_abs_planar_distortion": round(float(np.mean(np.abs(planar_bias))), 4),
     }
+    if allocation_comparison is not None:
+        summary["allocation_comparison"] = allocation_comparison
     math_notes = {
         "method": "Mass-Conserving Lixel Network Kernel Density Estimation (Okabe-Sugihara / Diggle)",
         "formula_latex": r"\hat{\lambda}_{\mathrm{NKDE}}(q) = \sum_{i=1}^{n} w_i \frac{K(d_{\mathrm{net}}(q,s_i)/h_{\mathrm{net}})}{\sum_{q' \in \mathcal{L}} K(d_{\mathrm{net}}(q',s_i)/h_{\mathrm{net}})\,|\ell_{q'}|}",
@@ -423,6 +485,7 @@ def run_nkde_analysis(
         "weighting": weighting,
         "equal_split_mass_conserving": equal_split_mass_conserving,
         "include_unverified_vgi": include_unverified_vgi,
+        "allocation_mode": allocation_mode,
         "top_hotspot_pct": top_hotspot_pct,
     }
 
@@ -431,7 +494,7 @@ def run_nkde_analysis(
         dataset_id=dataset_id,
         job_type="NKDE",
         parameters=params,
-        sample_size=len(ev_idx_arr),
+        sample_size=distinct_incident_count,
         runtime_ms=runtime_ms,
         summary_metrics=summary,
         ground_truth_eval=gt_eval,

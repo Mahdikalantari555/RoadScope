@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 
 from ..config import CANONICAL_EPSG
+from .cure_diagnostics import cure_by_aadt
+from .length_spf import fit_length_scaled_nb_spf
 
 # Colorblind-safe 3x3 Stevens/Brewer Bivariate Palette:
 # First axis = Risk Terctile (1=Low, 2=Med, 3=High), Second axis = Uncertainty Terctile (1=Low, 2=Med, 3=High)
@@ -337,6 +339,43 @@ def compute_exposure_risk_and_eb(
             "w_environmental_cov": round(wn_env, 3),
         },
         "spf_strata_diagnostics": stratum_diagnostics,
+        "cure_diagnostic": cure_by_aadt(
+            eff_aadt,
+            obs_N,
+            spf_mu,
+            spf_alpha,
+            np.array([bool(r["is_imputed"]) or not (r["obs_aadt"] or r["aadt"]) for r in seg_rows]),
+        ),
+        "length_scaled_eb": (
+            lambda _fit: {
+                k: v
+                for k, v in _fit.items()
+                if k not in ("expected_spf", "alpha_i", "eb_expected", "eb_posterior_sd", "psi_excess", "shrinkage_weight")
+            }
+            | {
+                "rank_spearman_vs_legacy": round(
+                    float(
+                        0.0
+                        if len(eb_expected) < 3
+                        else np.corrcoef(
+                            np.argsort(np.argsort(eb_expected)),
+                            np.argsort(np.argsort(np.asarray(_fit["eb_expected"], dtype=float))),
+                        )[0, 1]
+                    ),
+                    4,
+                )
+                if _fit["status"] != "zero_crashes_unidentifiable"
+                else None
+            }
+        )(
+            fit_length_scaled_nb_spf(
+                obs_N,
+                eff_aadt,
+                len_km,
+                study_period_years=period_yr,
+                imputed_mask=np.array([bool(r["is_imputed"]) or not (r["obs_aadt"] or r["aadt"]) for r in seg_rows]),
+            )
+        ),
         "network_summary": {
             "segment_count": M,
             "total_verified_crashes": int(np.sum(obs_N)),

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import {
   BoxSelect,
   Crosshair,
@@ -18,6 +18,9 @@ import type {
   SnapCandidate,
 } from '../types/uai';
 import { BIVARIATE_3X3, wgs84ToUtm32N } from '../utils/colors';
+import { escapeHtml, safeHexColor } from '../utils/html';
+import { useLanguage } from '../i18n';
+import { getMapChartsText } from '../workspaceI18n';
 
 interface VgiDraftMapOverlay {
   rawLon: number;
@@ -35,6 +38,7 @@ interface MapCanvasProps {
   vgiDisplacementGeojson: GeoJSON.FeatureCollection | null;
   vgiUncertaintyGeojson: GeoJSON.FeatureCollection | null;
   nkdeGeojson: GeoJSON.FeatureCollection | null;
+  tnkdeGeojson?: GeoJSON.FeatureCollection | null;
   giStarGeojson: GeoJSON.FeatureCollection | null;
   ndbscanGeojson: GeoJSON.FeatureCollection | null;
   riskEbGeojson: GeoJSON.FeatureCollection | null;
@@ -59,6 +63,7 @@ const OVERLAY_LABELS: { value: MapOverlayMode; label: string; group: string }[] 
   { value: 'incidents', label: 'Incidents + Severity Clusters', group: 'Observations' },
   { value: 'true_lambda', label: 'Ground-Truth Intensity λ(e,m,t)', group: 'Simulator' },
   { value: 'nkde', label: 'Network KDE (Lixel Shortest-Path)', group: 'Spatial Lab' },
+  { value: 'tnkde', label: 'Adaptive Spatiotemporal TNKDE Slice', group: 'Spatial Lab' },
   { value: 'planar_kde', label: 'Planar 2D Euclidean KDE', group: 'Spatial Lab' },
   { value: 'planar_bias', label: 'Planar − NKDE Distortion Bias (Δ)', group: 'Spatial Lab' },
   { value: 'gi_star', label: 'Network Getis-Ord Gi* (p & FDR)', group: 'Spatial Lab' },
@@ -81,6 +86,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   vgiDisplacementGeojson,
   vgiUncertaintyGeojson,
   nkdeGeojson,
+  tnkdeGeojson,
   giStarGeojson,
   ndbscanGeojson,
   riskEbGeojson,
@@ -98,6 +104,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   vgiDraftOverlay,
   flyToTarget,
 }) => {
+  const { language, t } = useLanguage();
+  const mapCopy = getMapChartsText(language);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
@@ -660,17 +668,17 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             const html = `
               <div style="background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;padding:10px 12px;font-size:11px;min-width:235px;font-family:Inter,sans-serif;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                  <span style="font-weight:700;color:${p.color || '#38bdf8'};">${p.severity_label || p.severity_code}</span>
-                  <span style="font-family:monospace;font-size:10px;color:#94a3b8;">#${p.id} · ${p.verification_status}</span>
+                  <span style="font-weight:700;color:${safeHexColor(p.color, '#38bdf8')};">${escapeHtml(p.severity_label || p.severity_code)}</span>
+                  <span style="font-family:monospace;font-size:10px;color:#94a3b8;">#${escapeHtml(p.id)} · ${escapeHtml(p.verification_status)}</span>
                 </div>
-                <div style="font-weight:600;margin-bottom:4px;">${p.category_label || p.category_code}</div>
-                <div style="color:#cbd5e1;margin-bottom:6px;">Corridor: <b>${p.segment_name || 'N/A'}</b> (LRS m=${p.linear_offset_m}m)</div>
+                <div style="font-weight:600;margin-bottom:4px;">${escapeHtml(p.category_label || p.category_code)}</div>
+                <div style="color:#cbd5e1;margin-bottom:6px;">Corridor: <b>${escapeHtml(p.segment_name || 'N/A')}</b> (LRS m=${escapeHtml(p.linear_offset_m)}m)</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-family:monospace;font-size:10px;color:#94a3b8;border-top:1px solid #1e293b;padding-top:6px;">
-                  <div>EPDO: <b style="color:#f8fafc">${p.epdo_weight}</b></div>
-                  <div>Credibility: <b style="color:#10b981">${p.vgi_credibility_score}</b></div>
-                  <div>Snap d⊥: <b>${p.orthogonal_snap_dist_m}m</b></div>
-                  <div>Witnesses: <b>${p.witness_count}</b></div>
-                  <div style="grid-column:span 2;">UTC: ${p.occurred_at_utc}</div>
+                  <div>EPDO: <b style="color:#f8fafc">${escapeHtml(p.epdo_weight)}</b></div>
+                  <div>Credibility: <b style="color:#10b981">${escapeHtml(p.vgi_credibility_score)}</b></div>
+                  <div>Snap d⊥: <b>${escapeHtml(p.orthogonal_snap_dist_m)}m</b></div>
+                  <div>Witnesses: <b>${escapeHtml(p.witness_count)}</b></div>
+                  <div style="grid-column:span 2;">UTC: ${escapeHtml(p.occurred_at_utc)}</div>
                 </div>
               </div>
             `;
@@ -693,19 +701,21 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               onSelectSegmentRef.current(sid);
               const extraMetric =
                 rp.eb_expected_crashes !== undefined
-                  ? `<div>EB Expected: <b style="color:#38bdf8">${rp.eb_expected_crashes}</b> (PSI: ${rp.psi_excess_crashes})</div>
-                     <div>Epistemic U: <b style="color:#f59e0b">${rp.epistemic_uncertainty}</b> [${rp.bivariate_class}]</div>`
+                  ? `<div>EB Expected: <b style="color:#38bdf8">${escapeHtml(rp.eb_expected_crashes)}</b> (PSI: ${escapeHtml(rp.psi_excess_crashes)})</div>
+                     <div>Epistemic U: <b style="color:#f59e0b">${escapeHtml(rp.epistemic_uncertainty)}</b> [${escapeHtml(rp.bivariate_class)}]</div>`
+                  : rp.tnkde_slice_km_day !== undefined
+                  ? `<div>TNKDE Slice: <b style="color:#22d3ee">${escapeHtml(rp.tnkde_slice_km_day)}/km·day</b></div>`
                   : rp.nkde_density !== undefined
-                  ? `<div>NKDE: <b style="color:#fca50a">${rp.nkde_density}/km</b> · Planar: ${rp.planar_density}/km</div>
-                     <div>Planar Bias Δ: <b style="color:#f87171">${rp.planar_bias}</b></div>`
+                  ? `<div>NKDE: <b style="color:#fca50a">${escapeHtml(rp.nkde_density)}/km</b> · Planar: ${escapeHtml(rp.planar_density)}/km</div>
+                     <div>Planar Bias Δ: <b style="color:#f87171">${escapeHtml(rp.planar_bias)}</b></div>`
                   : rp.gi_star_z !== undefined
-                  ? `<div>Gi* Z: <b style="color:#ef4444">${rp.gi_star_z}</b> (p=${rp.pseudo_p}, FDR q=${rp.fdr_q})</div>`
+                  ? `<div>Gi* Z: <b style="color:#ef4444">${escapeHtml(rp.gi_star_z)}</b> (p=${escapeHtml(rp.pseudo_p)}, FDR q=${escapeHtml(rp.fdr_q)})</div>`
                   : '';
               const html = `
                 <div style="background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;padding:10px 12px;font-size:11px;min-width:230px;">
-                  <div style="font-weight:700;color:#22d3ee;margin-bottom:2px;">${rp.name || rp.segment_name || `Segment #${sid}`}</div>
+                  <div style="font-weight:700;color:#22d3ee;margin-bottom:2px;">${escapeHtml(rp.name || rp.segment_name || `Segment #${sid}`)}</div>
                   <div style="font-family:monospace;font-size:10px;color:#94a3b8;margin-bottom:6px;">
-                    Class: ${rp.road_class} · Elev: L${rp.elevation_level ?? 0} · Len: ${rp.length_m}m
+                    Class: ${escapeHtml(rp.road_class)} · Elev: L${escapeHtml(rp.elevation_level ?? 0)} · Len: ${escapeHtml(rp.length_m)}m
                   </div>
                   <div style="font-family:monospace;font-size:10px;color:#cbd5e1;display:grid;gap:3px;">
                     ${extraMetric}
@@ -785,8 +795,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-    (map.getSource('nkde-src') as maplibregl.GeoJSONSource)?.setData(nkdeGeojson || EMPTY_FC);
-  }, [nkdeGeojson, mapLoaded]);
+    const activeSurface = overlayMode === 'tnkde' ? tnkdeGeojson : nkdeGeojson;
+    (map.getSource('nkde-src') as maplibregl.GeoJSONSource)?.setData(activeSurface || EMPTY_FC);
+  }, [nkdeGeojson, tnkdeGeojson, overlayMode, mapLoaded]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -924,12 +935,21 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     map.setLayoutProperty('incidents-unclustered', 'visibility', showIncidents ? 'visible' : 'none');
     map.setLayoutProperty('layer-true-lambda', 'visibility', overlayMode === 'true_lambda' ? 'visible' : 'none');
 
-    const isNkdeFamily = overlayMode === 'nkde' || overlayMode === 'planar_kde' || overlayMode === 'planar_bias';
+    const isNkdeFamily =
+      overlayMode === 'nkde' ||
+      overlayMode === 'tnkde' ||
+      overlayMode === 'planar_kde' ||
+      overlayMode === 'planar_bias';
     map.setLayoutProperty('layer-nkde-surface', 'visibility', isNkdeFamily ? 'visible' : 'none');
     if (overlayMode === 'nkde') {
       map.setPaintProperty('layer-nkde-surface', 'line-color', [
         'interpolate', ['linear'], ['coalesce', ['get', 'nkde_norm'], 0],
         0.0, '#160b39', 0.25, '#5c126e', 0.5, '#b63679', 0.75, '#fb8861', 1.0, '#fcfdbf',
+      ]);
+    } else if (overlayMode === 'tnkde') {
+      map.setPaintProperty('layer-nkde-surface', 'line-color', [
+        'interpolate', ['linear'], ['coalesce', ['get', 'tnkde_norm'], 0],
+        0.0, '#0f172a', 0.25, '#0369a1', 0.5, '#06b6d4', 0.75, '#f59e0b', 1.0, '#f43f5e',
       ]);
     } else if (overlayMode === 'planar_kde') {
       map.setPaintProperty('layer-nkde-surface', 'line-color', [
@@ -1089,10 +1109,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       {/* Fallback SVG Vector Canvas if WebGL context unavailable */}
       {webglError && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-300 p-6 text-center">
-          <p className="text-sm font-mono text-amber-400 mb-2">Cartographic Vector Fallback Active ({webglError})</p>
-          <p className="text-xs text-slate-400 max-w-md">
-            All spatial queries, NKDE, Gi*, N-DBSCAN, and Empirical Bayes computations are active via REST/GeoJSON API.
+          <p className="text-sm font-mono text-amber-400 mb-2">
+            {t('noWebgl')} ({webglError})
           </p>
+          <p className="text-xs text-slate-400 max-w-md">{mapCopy.fallbackSubtitle}</p>
         </div>
       )}
 
@@ -1109,9 +1129,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         />
       )}
 
-      {/* Top-Left: Multi-Scale Cartographic Layer Switcher & Spatial Selection Toolbar */}
+      {/* Top-Start: Multi-Scale Cartographic Layer Switcher & Spatial Selection Toolbar */}
       <div
-        className={`absolute top-3 left-3 z-10 flex flex-col gap-2 max-w-[330px] ${
+        className={`absolute top-3 start-3 z-10 flex flex-col gap-2 max-w-[330px] ${
           darkMode ? 'text-slate-100' : 'text-slate-900'
         }`}
       >
@@ -1123,7 +1143,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           <div className="flex items-center gap-1.5 mb-1.5">
             <Layers className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             <span className="text-[11px] font-semibold uppercase tracking-wider opacity-80">
-              Cartographic Surface Layer
+              {mapCopy.layerTitle}
             </span>
           </div>
           <select
@@ -1145,6 +1165,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           {/* Map Interaction Tools */}
           <div className="flex items-center gap-1 mt-2 pt-2 border-t border-slate-800/60 flex-wrap">
             <button
+              type="button"
               onClick={() => onChangeTool('inspect')}
               title="Inspect Incidents, Lixels & Road Segments"
               className={`px-2 py-1 rounded text-[11px] flex items-center gap-1 border ${
@@ -1153,9 +1174,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                   : 'border-transparent hover:bg-slate-800/60 opacity-80'
               }`}
             >
-              <Eye className="w-3 h-3" /> Inspect
+              <Eye className="w-3 h-3" /> {mapCopy.toolInspect}
             </button>
             <button
+              type="button"
               onClick={() => onChangeTool('box_select')}
               title="Drag Bounding-Box Spatial Brush"
               className={`px-2 py-1 rounded text-[11px] flex items-center gap-1 border ${
@@ -1164,9 +1186,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                   : 'border-transparent hover:bg-slate-800/60 opacity-80'
               }`}
             >
-              <BoxSelect className="w-3 h-3" /> Box Brush
+              <BoxSelect className="w-3 h-3" /> {mapCopy.toolBox}
             </button>
             <button
+              type="button"
               onClick={() => {
                 setDraftPolyVertices([]);
                 onChangeTool('poly_select');
@@ -1178,9 +1201,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                   : 'border-transparent hover:bg-slate-800/60 opacity-80'
               }`}
             >
-              <Lasso className="w-3 h-3" /> Poly
+              <Lasso className="w-3 h-3" /> {mapCopy.toolPoly}
             </button>
             <button
+              type="button"
               onClick={() => onChangeTool('vgi_pin')}
               title="Place Citizen VGI Incident Pin on Map"
               className={`px-2 py-1 rounded text-[11px] flex items-center gap-1 border ${
@@ -1189,38 +1213,42 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                   : 'border-transparent hover:bg-slate-800/60 opacity-80'
               }`}
             >
-              <MapPin className="w-3 h-3" /> Pin VGI
+              <MapPin className="w-3 h-3" /> {mapCopy.toolPin}
             </button>
           </div>
 
           {/* Toggles: Graticule, Nodes, VGI Displacement, Reset */}
           <div className="flex items-center justify-between gap-1 mt-1.5 text-[10px] font-mono opacity-85">
             <button
+              type="button"
               onClick={() => setShowGraticule((v) => !v)}
               className={`px-1.5 py-0.5 rounded border ${
                 showGraticule ? 'border-cyan-500/50 text-cyan-400' : 'border-slate-700 text-slate-400'
               }`}
             >
-              <Grid className="w-2.5 h-2.5 inline mr-1" />
-              UTM Grid
+              <Grid className="w-2.5 h-2.5 inline me-1" />
+              {mapCopy.utmGrid}
             </button>
             <button
+              type="button"
               onClick={() => setShowNodes((v) => !v)}
               className={`px-1.5 py-0.5 rounded border ${
                 showNodes ? 'border-cyan-500/50 text-cyan-400' : 'border-slate-700 text-slate-400'
               }`}
             >
-              Nodes
+              {mapCopy.nodes}
             </button>
             <button
+              type="button"
               onClick={() => setShowVgiVectors((v) => !v)}
               className={`px-1.5 py-0.5 rounded border ${
                 showVgiVectors ? 'border-amber-500/50 text-amber-400' : 'border-slate-700 text-slate-400'
               }`}
             >
-              VGI Drift
+              {mapCopy.vgiDrift}
             </button>
             <button
+              type="button"
               onClick={resetCamera}
               title="Reset Map Extent"
               className="px-1.5 py-0.5 rounded border border-slate-700 hover:border-slate-500"
@@ -1233,23 +1261,27 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         {/* Polygon Drawing Action Banner */}
         {activeTool === 'poly_select' && (
           <div className="rounded border border-cyan-400/60 bg-slate-950/95 text-cyan-200 px-3 py-2 text-xs flex items-center justify-between gap-2 shadow-lg">
-            <span>Click map vertices ({draftPolyVertices.length} pts)</span>
+            <span>
+              {mapCopy.clickVertices} ({draftPolyVertices.length})
+            </span>
             <div className="flex gap-1">
               <button
+                type="button"
                 disabled={draftPolyVertices.length < 3}
                 onClick={finishPolygonBrush}
                 className="px-2 py-0.5 rounded bg-cyan-500 text-slate-950 font-semibold disabled:opacity-40"
               >
-                Apply
+                {mapCopy.apply}
               </button>
               <button
+                type="button"
                 onClick={() => {
                   setDraftPolyVertices([]);
                   onChangeTool('inspect');
                 }}
                 className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300"
               >
-                Cancel
+                {mapCopy.cancel}
               </button>
             </div>
           </div>
@@ -1259,19 +1291,23 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         {(activeBbox || activePolygon || selectedSegmentId !== null) && (
           <div className="rounded border border-emerald-500/50 bg-slate-950/90 text-emerald-300 px-2.5 py-1.5 text-[11px] font-mono flex items-center justify-between gap-2">
             <span>
-              Spatial Filter:{' '}
-              {activeBbox ? 'Bounding Box' : activePolygon ? `Polygon (${activePolygon.length}v)` : `Seg #${selectedSegmentId}`}
+              {mapCopy.spatialFilter}:{' '}
+              {activeBbox
+                ? 'Bounding Box'
+                : activePolygon
+                ? `Polygon (${activePolygon.length}v)`
+                : `Seg #${selectedSegmentId}`}
             </span>
-            <button onClick={clearSpatialFilters} className="hover:text-white flex items-center gap-0.5">
-              <X className="w-3 h-3" /> Clear
+            <button type="button" onClick={clearSpatialFilters} className="hover:text-white flex items-center gap-0.5">
+              <X className="w-3 h-3" /> {mapCopy.clear}
             </button>
           </div>
         )}
       </div>
 
-      {/* Bottom-Left: Publication-Grade Dynamic Cartographic Legend */}
+      {/* Bottom-Start: Publication-Grade Dynamic Cartographic Legend */}
       <div
-        className={`absolute bottom-9 left-3 z-10 rounded-md border p-2.5 shadow-lg backdrop-blur-md text-[11px] max-w-[275px] ${
+        className={`absolute bottom-9 start-3 z-10 rounded-md border p-2.5 shadow-lg backdrop-blur-md text-[11px] max-w-[275px] ${
           darkMode ? 'bg-slate-950/90 border-slate-800 text-slate-200' : 'bg-white/95 border-slate-300 text-slate-800'
         }`}
       >
@@ -1316,6 +1352,25 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               <span>0.0 (Low)</span>
               <span>Median</span>
               <span>99th Pct (Peak)</span>
+            </div>
+          </div>
+        )}
+
+        {overlayMode === 'tnkde' && (
+          <div>
+            <div className="font-semibold mb-1 text-[10px] uppercase tracking-wider">
+              Adaptive Spatiotemporal TNKDE Slice (/km·day)
+            </div>
+            <div
+              className="h-2.5 w-full rounded"
+              style={{
+                background: 'linear-gradient(to right, #0f172a, #0369a1, #06b6d4, #f59e0b, #f43f5e)',
+              }}
+            />
+            <div className="flex justify-between text-[10px] font-mono mt-1 opacity-80">
+              <span>0.0</span>
+              <span>Moderate</span>
+              <span>Slice Peak</span>
             </div>
           </div>
         )}
