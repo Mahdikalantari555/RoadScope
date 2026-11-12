@@ -5,6 +5,8 @@ RoadScope is the new name for the Urban Accident Intelligence (UAI) research pla
 - [برنامهٔ جامع پیاده‌سازی](IMPLEMENTATION_PLAN_FA.md)
 - [OpenSpec proposals and specifications](openspec/README.md)
 - [Literature review](LITERATURE_REVIEW_FA.md)
+- [Operations & Security Runbook](docs/OPERATIONS.md)
+- [Scientific & Engineering Implementation Status](docs/IMPLEMENTATION_STATUS.md)
 
 ## RoadScope research platform
 

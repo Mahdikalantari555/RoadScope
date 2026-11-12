@@ -8,13 +8,19 @@ import type {
   SnapCandidate,
 } from '../types/uai';
 
+let apiToken = '';
+export function setApiToken(token: string) {
+  apiToken = token;
+}
+
 async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, {
+    ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
       ...(options?.headers || {}),
     },
-    ...options,
   });
   if (!res.ok) {
     let errMsg = `HTTP ${res.status}`;
@@ -43,6 +49,17 @@ export const uaiApi = {
     apiJson<NetworkLayersPayload>(
       `/api/v1/network/layers?include_lixels=${includeLixels}${datasetId ? `&dataset_id=${datasetId}` : ''}`
     ),
+
+  getDirectedTopology: (datasetId?: number, includeEdges = true) =>
+    apiJson<Record<string, any>>(
+      `/api/v1/network/directed-topology?include_edges=${includeEdges}${datasetId ? `&dataset_id=${datasetId}` : ''}`
+    ),
+
+  runDirectedTransport: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/network/directed-transport', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   queryCmv: (datasetId: number, filters: CmvFilterState) =>
     apiJson<CmvStatePayload>('/api/v1/analytics/cmv', {
@@ -106,7 +123,10 @@ export const uaiApi = {
       body: JSON.stringify(payload),
     }),
 
-  corroborateIncident: (accidentId: number, payload: { witness_notes: string; observational_radius_m: number; actor_role: string }) =>
+  corroborateIncident: (
+    accidentId: number,
+    payload: { witness_notes: string; observational_radius_m: number; actor_role: string }
+  ) =>
     apiJson<Record<string, unknown>>(`/api/v1/vgi/${accidentId}/corroborate`, {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -118,7 +138,9 @@ export const uaiApi = {
       triage_queue: Record<string, any>[];
       duplicate_clusters: Record<string, any>[];
       diagnostics: Record<string, any>;
-    }>(`/api/v1/steward/workspace?dataset_id=${datasetId}&max_net_dist_m=${maxNetDist}&max_time_diff_min=${maxTimeDiff}`),
+    }>(
+      `/api/v1/steward/workspace?dataset_id=${datasetId}&max_net_dist_m=${maxNetDist}&max_time_diff_min=${maxTimeDiff}`
+    ),
 
   stewardReview: (payload: Record<string, unknown>) =>
     apiJson<Record<string, unknown>>('/api/v1/steward/review', {
@@ -177,4 +199,48 @@ export const uaiApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  // Research Contracts API
+  runResearchTnkde: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/tnkde', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchBenchmark: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/benchmark', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchHawkes: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/hawkes', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchEvpi: (payload: {
+    losses: number[][];
+    actions: string[];
+    loss_unit: string;
+    horizon_years: number;
+  }) =>
+    apiJson<Record<string, any>>('/api/v1/research/evpi', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  getVgiDiagnostics: (datasetId?: number) =>
+    apiJson<Record<string, any>>(
+      `/api/v1/research/vgi-diagnostics${datasetId ? `?dataset_id=${datasetId}` : ''}`
+    ),
+
+  runResearchIpw: (payload: { observed: number[]; exposure: number[]; clip?: number }) =>
+    apiJson<Record<string, any>>('/api/v1/research/ipw', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  getSurrogates: (datasetId?: number) =>
+    apiJson<Record<string, any>>(`/api/v1/research/surrogates${datasetId ? `?dataset_id=${datasetId}` : ''}`),
 };

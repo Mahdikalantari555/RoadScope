@@ -3,9 +3,12 @@ import ReactDOM from 'react-dom/client';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './index.css';
 import { App } from './App';
+import { LanguageProvider } from './i18n';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <LanguageProvider>
+      <App />
+    </LanguageProvider>
   </React.StrictMode>
 );

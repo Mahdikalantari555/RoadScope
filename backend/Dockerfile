@@ -1,16 +1,18 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libsqlite3-mod-spatialite \
-    libgeos-c1v5 \
+    libgeos-dev \
     libproj-dev \
-    proj-data \
+    libsqlite3-mod-spatialite \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 COPY migrations /workspace/migrations
-COPY backend/requirements.txt /workspace/backend/requirements.txt
-RUN pip install --no-cache-dir -r /workspace/backend/requirements.txt
+COPY backend/requirements.lock /workspace/backend/requirements.lock
+RUN pip install --no-cache-dir -r /workspace/backend/requirements.lock
 
 COPY backend /workspace/backend
 WORKDIR /workspace/backend

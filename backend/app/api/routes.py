@@ -14,6 +14,7 @@ from ..schemas import (
     CmvQueryRequest,
     CoordinateProjectRequest,
     CorroborateRequest,
+    DirectedTransportRequest,
     MergeDuplicateClusterRequest,
     NetworkAutocorrelationRequest,
     NetworkDbscanRequest,
@@ -28,6 +29,8 @@ from ..services.analytics_cmv import (
     get_network_layers_geojson,
     query_synchronized_cmv_state,
 )
+from ..services.directed_topology import build_directed_lixel_topology
+from ..services.directed_transport import run_directed_transport
 from ..services.map_matching import (
     compute_topological_snap_candidates,
     find_spatiotemporal_conflation_candidates,
@@ -50,6 +53,14 @@ from ..services.stewardship import (
     submit_citizen_vgi_report,
     validate_metric_bounds,
 )
+
+
+def _trusted_role(legacy: str) -> str:
+    from ..security import demo_enabled, identity
+
+    principal = identity.get()
+    return legacy if demo_enabled() else (principal.role if principal else "anonymous")
+
 
 router = APIRouter(prefix="/api/v1")
 
@@ -152,7 +163,7 @@ def generate_simulation_dataset(req: SimulationRequest) -> dict[str, Any]:
                 vgi_false_alarm_count=req.vgi_false_alarm_count,
                 study_period_years=req.study_period_years,
                 activate_dataset=True,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -166,6 +177,71 @@ def fetch_network_layers(
     with db_session() as conn:
         ds_id = _resolve_dataset_id(conn, dataset_id)
         return get_network_layers_geojson(conn, dataset_id=ds_id, include_lixels=include_lixels)
+
+
+@router.get("/network/directed-topology")
+def directed_topology_endpoint(
+    dataset_id: int | None = Query(default=None),
+    include_edges: bool = Query(default=False),
+) -> dict[str, Any]:
+    """Return experimental topology metadata, optionally including edge states."""
+    with db_session() as conn:
+        conn.execute("BEGIN")
+        ds_id = _resolve_dataset_id(conn, dataset_id)
+        try:
+            topo = build_directed_lixel_topology(conn, ds_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        result: dict[str, Any] = {
+            "dataset_id": ds_id,
+            "topology_version": topo.version,
+            "state_count": topo.graph.number_of_nodes(),
+            "transition_count": topo.graph.number_of_edges(),
+            "assumed_bidirectional_segments": topo.assumed_direction_segments,
+            "direction_convention": "+1 is u to v, -1 is v to u, 0 is bidirectional",
+            "distance_unit": "m",
+            "status": "experimental topology; metric-graph heat diffusion is not implemented",
+        }
+        if include_edges:
+            def state(s: tuple[int, int, int]) -> dict[str, int]:
+                return {"segment_id": s[0], "lixel_id": s[1], "direction": s[2]}
+
+            result["states"] = [state(s) for s in topo.graph.nodes]
+            result["transitions"] = [
+                {
+                    "from": state(a),
+                    "to": state(b),
+                    "weight_m": attrs["weight_m"],
+                    "kind": attrs["kind"],
+                    "via_node": attrs.get("via_node"),
+                }
+                for a, b, attrs in topo.graph.edges(data=True)
+            ]
+        return result
+
+
+@router.post("/network/directed-transport")
+def directed_transport_endpoint(req: DirectedTransportRequest) -> dict[str, Any]:
+    with db_session() as conn:
+        conn.execute("BEGIN")
+        ds_id = _resolve_dataset_id(conn, req.dataset_id)
+        try:
+            topology = build_directed_lixel_topology(conn, ds_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        return run_directed_transport(
+            topology,
+            (req.segment_id, req.lixel_id, req.direction),
+            mass=req.mass,
+            speed_m_s=req.speed_m_s,
+            duration_s=req.duration_s,
+            steps=req.steps,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ArithmeticError as exc:
+        raise HTTPException(status_code=500, detail="Transport numerical validation failed") from exc
 
 
 @router.post("/vgi/preview-snap-and-conflate")
@@ -242,7 +318,7 @@ def submit_vgi_endpoint(req: CitizenReportSubmitRequest) -> dict[str, Any]:
                 narrative=req.narrative,
                 attachment_filenames=req.attachment_filenames,
                 selected_segment_id=req.selected_segment_id,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -257,7 +333,7 @@ def corroborate_vgi_endpoint(accident_id: int, req: CorroborateRequest) -> dict[
                 target_accident_id=accident_id,
                 witness_notes=req.witness_notes,
                 observational_radius_m=req.observational_radius_m,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -335,7 +411,7 @@ def steward_review_endpoint(req: StewardReviewRequest) -> dict[str, Any]:
                 override_offset_m=req.override_offset_m,
                 override_severity_code=req.override_severity_code,
                 review_notes=req.review_notes,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -353,7 +429,7 @@ def steward_merge_endpoint(req: MergeDuplicateClusterRequest) -> dict[str, Any]:
                 duplicate_ids=req.duplicate_ids,
                 verify_canonical=req.verify_canonical,
                 review_notes=req.review_notes,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -374,8 +450,9 @@ def lab_nkde_endpoint(req: NkdeRequest) -> dict[str, Any]:
                 weighting=req.weighting,
                 equal_split_mass_conserving=req.equal_split_mass_conserving,
                 include_unverified_vgi=req.include_unverified_vgi,
+                allocation_mode=req.allocation_mode,
                 top_hotspot_pct=req.top_hotspot_pct,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -396,7 +473,7 @@ def lab_autocorrelation_endpoint(req: NetworkAutocorrelationRequest) -> dict[str
                 attribute_mode=req.attribute_mode,
                 include_unverified_vgi=req.include_unverified_vgi,
                 random_seed=req.random_seed,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -413,7 +490,7 @@ def lab_ndbscan_endpoint(req: NetworkDbscanRequest) -> dict[str, Any]:
                 eps_net_m=req.eps_net_m,
                 min_samples=req.min_samples,
                 include_unverified_vgi=req.include_unverified_vgi,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

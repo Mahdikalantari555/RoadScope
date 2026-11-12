@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .config import MIGRATIONS_DIR, SQLITE_DB_PATH
+from .migrations import apply_migrations
 
 _SPATIALITE_LOADED_ONCE = False
 
@@ -50,9 +51,10 @@ def init_schema_and_reference_data(db_path: Path | None = None) -> None:
     schema_sql = (MIGRATIONS_DIR / "002_spatialite_schema.sql").read_text(encoding="utf-8")
     with db_session(db_path) as conn:
         conn.executescript(schema_sql)
+        apply_migrations(conn, MIGRATIONS_DIR)
         now = utc_now_iso()
 
-        # Seed the 6 persona users
+        # Seed the persona users
         users = [
             ("dr_weber_sim", "Dr. Lukas Weber", "simulation_scientist", 0.98),
             ("citizen_maya", "Maya Lindner (VGI Contributor)", "citizen_reporter", 0.72),
@@ -143,7 +145,7 @@ def init_schema_and_reference_data(db_path: Path | None = None) -> None:
                     "local_street": 0.95,
                 },
                 15,
-                "Right-hook, overtaking, or bike-lane冲突 along surface corridors.",
+                "Right-hook, overtaking, or bike-lane conflict along surface corridors.",
             ),
             (
                 "SIDESWIPE",
@@ -210,6 +212,11 @@ def log_audit_event(
     before_state: dict[str, Any] | None = None,
     after_state: dict[str, Any] | None = None,
 ) -> None:
+    from .security import demo_enabled, identity
+
+    principal = identity.get()
+    if principal is not None and not demo_enabled():
+        actor_user_id, actor_role = principal.user_id, principal.role
     conn.execute(
         """
         INSERT INTO audit_logs

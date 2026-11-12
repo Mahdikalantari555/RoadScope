@@ -8,6 +8,7 @@ import { RiskEbWorkspace } from './components/RiskEbWorkspace';
 import { SimulatorWorkspace } from './components/SimulatorWorkspace';
 import { SpatialLabWorkspace } from './components/SpatialLabWorkspace';
 import { StewardWorkspace } from './components/StewardWorkspace';
+import { useLanguage } from './i18n';
 import type {
   CmvFilterState,
   CmvStatePayload,
@@ -35,6 +36,7 @@ const INITIAL_FILTERS: CmvFilterState = {
 };
 
 export const App: React.FC = () => {
+  const { t } = useLanguage();
   const [darkMode, setDarkMode] = useState<boolean>(true);
   const [meta, setMeta] = useState<PlatformMeta | null>(null);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceMode>('analytics');
@@ -48,6 +50,7 @@ export const App: React.FC = () => {
 
   // Cached analytical results across workspaces
   const [nkdeResult, setNkdeResult] = useState<Record<string, any> | null>(null);
+  const [tnkdeGeojson, setTnkdeGeojson] = useState<GeoJSON.FeatureCollection | null>(null);
   const [giStarResult, setGiStarResult] = useState<Record<string, any> | null>(null);
   const [ndbscanResult, setNdbscanResult] = useState<Record<string, any> | null>(null);
   const [riskData, setRiskData] = useState<RiskEbPayload | null>(null);
@@ -64,7 +67,6 @@ export const App: React.FC = () => {
   const [flyToTarget, setFlyToTarget] = useState<{ lon: number; lat: number; zoom?: number; ts: number } | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
 
-  // Toggle HTML root class
   useEffect(() => {
     const root = document.documentElement;
     if (darkMode) root.classList.add('dark');
@@ -89,6 +91,7 @@ export const App: React.FC = () => {
       setNetworkLayers(net);
       setRiskData(eb);
       setNkdeResult(null);
+      setTnkdeGeojson(null);
       setGiStarResult(null);
       setNdbscanResult(null);
     } catch (e) {
@@ -100,7 +103,6 @@ export const App: React.FC = () => {
     loadDatasetContext();
   }, [loadDatasetContext]);
 
-  // Synchronize CMV state whenever dataset or cross-filters change
   const refreshCmv = useCallback(async () => {
     if (!meta?.active_dataset) return;
     const cmv = await uaiApi.queryCmv(meta.active_dataset.id, filters);
@@ -113,7 +115,6 @@ export const App: React.FC = () => {
 
   const handleSelectWorkspace = (mode: WorkspaceMode) => {
     setActiveWorkspace(mode);
-    // Align default role & map overlay thoughtfully when entering specialized workspaces
     if (mode === 'citizen_vgi') {
       setActiveRole('citizen_reporter');
       setActiveTool('vgi_pin');
@@ -162,7 +163,7 @@ export const App: React.FC = () => {
   if (bootError) {
     return (
       <div className="min-h-screen bg-slate-950 text-rose-300 flex items-center justify-center p-8 font-mono text-sm">
-        Platform Initialization Error: {bootError}
+        {t('initializationError')}: <bdi>{bootError}</bdi>
       </div>
     );
   }
@@ -170,7 +171,7 @@ export const App: React.FC = () => {
   if (!meta) {
     return (
       <div className="min-h-screen bg-slate-950 text-cyan-300 flex items-center justify-center p-8 font-mono text-sm">
-        Initializing RoadScope Spatial Engine (EPSG:25832)...
+        {t('initializing')}
       </div>
     );
   }
@@ -196,8 +197,8 @@ export const App: React.FC = () => {
 
       {/* Split Geovisual Analytics Canvas + Scientific Control & Statistical Workspace */}
       <main className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12">
-        {/* Left/Center: Persistent Multi-Scale WebGL Cartographic Canvas */}
-        <section className="lg:col-span-7 xl:col-span-7 h-[46vh] lg:h-full border-b lg:border-b-0 lg:border-r border-slate-800 relative">
+        {/* Start: Persistent Multi-Scale WebGL Cartographic Canvas */}
+        <section className="lg:col-span-7 xl:col-span-7 h-[46vh] lg:h-full border-b lg:border-b-0 lg:border-e border-slate-800 relative">
           <MapCanvas
             darkMode={darkMode}
             contextGeojson={meta.context_geojson}
@@ -206,6 +207,7 @@ export const App: React.FC = () => {
             vgiDisplacementGeojson={cmvData?.vgi_displacement_geojson ?? null}
             vgiUncertaintyGeojson={cmvData?.vgi_uncertainty_geojson ?? null}
             nkdeGeojson={nkdeResult?.layer_geojson ?? null}
+            tnkdeGeojson={tnkdeGeojson}
             giStarGeojson={giStarResult?.layer_geojson ?? null}
             ndbscanGeojson={ndbscanResult?.layer_geojson ?? null}
             riskEbGeojson={riskData?.layer_geojson ?? null}
@@ -230,7 +232,7 @@ export const App: React.FC = () => {
           />
         </section>
 
-        {/* Right: Active Scientific Persona Workspace */}
+        {/* End: Active Scientific Persona Workspace */}
         <section className="lg:col-span-5 xl:col-span-5 h-[54vh] lg:h-full min-h-0 overflow-hidden">
           {activeWorkspace === 'analytics' && (
             <AnalyticsWorkspace
@@ -252,6 +254,7 @@ export const App: React.FC = () => {
               onNkdeResult={setNkdeResult}
               onGiStarResult={setGiStarResult}
               onNdbscanResult={setNdbscanResult}
+              onTnkdeGeojson={setTnkdeGeojson}
               nkdeResult={nkdeResult}
               giStarResult={giStarResult}
               ndbscanResult={ndbscanResult}
