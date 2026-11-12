@@ -79,6 +79,20 @@ def install_security(app) -> None:
                             if user:
                                 principal = Identity(int(user["id"]), str(user["role"]))
                             break
+                # Until real-data disclosure policy and per-route authorization are approved,
+                # isolate the entire instance as soon as any real incident dataset exists.
+                # This deliberately includes GETs, exports and read-only POSTs; query parameters
+                # cannot be trusted to identify every dataset touched by an endpoint.
+                if request.method != "OPTIONS":
+                    with db_session() as conn:
+                        real_dataset = conn.execute(
+                            "SELECT 1 FROM dataset_sources WHERE is_synthetic = 0 LIMIT 1"
+                        ).fetchone()
+                    if real_dataset:
+                        if principal is None:
+                            return JSONResponse({"detail": "Authentication required."}, status_code=401)
+                        if principal.role != "data_steward":
+                            return JSONResponse({"detail": "Insufficient server-side role."}, status_code=403)
             mutation = request.method not in {"GET", "HEAD", "OPTIONS"} and path not in READ_POSTS
             if mutation:
                 if principal is None:

@@ -23,7 +23,7 @@ The sample `.env.example` lists supported settings. Configuration values are dep
 ## 3. Authentication, Authorization & Synthetic Demo Guard
 
 - The demo mode refuses API access when any dataset is marked non-synthetic and disables network/study-area administration. It is not a public authentication mechanism.
-- With demo mode off, mutating endpoints require a bearer token mapped to a server-side user; network/study-area administration requires a steward. The current GET routes, process-local rate limit and demo VGI workflow are **not** suitable for sensitive real reports.
+- With demo mode off, mutating endpoints require a bearer token mapped to a server-side user; network/study-area administration requires a steward. If any non-synthetic dataset exists, all API reads and writes (including exports and read-only POSTs) are restricted to authenticated stewards until a privacy-reviewed publication model exists. The current GET routes, process-local rate limit and demo VGI workflow are **not** suitable for sensitive real reports.
 - Real reporting, public disclosure, secure tracking, retention/deletion and production authorization remain open requirements; do not expose this prototype to real citizen data.
 
 ---

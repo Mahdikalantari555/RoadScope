@@ -179,3 +179,21 @@ def test_built_spa_and_api_fallback(client):
     assert client.get("/api/v1/does-not-exist").status_code == 404
     asset = next((FRONTEND_DIST_DIR / "assets").glob("*.js"))
     assert client.get("/assets/" + asset.name).status_code == 200
+
+
+def test_real_data_makes_all_api_reads_and_exports_steward_only(client):
+    from app.db import db_session
+    with db_session() as conn:
+        conn.execute("UPDATE dataset_sources SET is_synthetic=0")
+    paths = ("/api/v1/meta", "/api/v1/network/layers", "/api/v1/steward/workspace",
+             "/api/v1/lab/jobs", "/api/v1/lab/jobs/1/export", "/api/v1/research/capabilities")
+    for path in paths:
+        anonymous = client.get(path)
+        citizen = client.get(path, headers={"Authorization": "Bearer test-citizen-secret"})
+        assert anonymous.status_code == 401, path
+        assert citizen.status_code == 403, path
+        assert "raw_lon" not in anonymous.text and "raw_lon" not in citizen.text
+    assert client.post('/api/v1/analytics/cmv', json={}).status_code == 401
+    assert client.post('/api/v1/analytics/cmv', json={},
+        headers={"Authorization": "Bearer test-citizen-secret"}).status_code == 403
+    assert client.get('/api/v1/meta', headers={"Authorization": "Bearer test-steward-secret"}).status_code == 200
