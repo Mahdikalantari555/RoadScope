@@ -23,6 +23,7 @@ from ..crs import (
     polygon_to_geojson_dict,
     to_metric,
     to_wgs84,
+    transform_coords,
 )
 from ..db import utc_now_iso
 
@@ -301,7 +302,7 @@ def get_study_area_context_geojson(
                     "name": "Demo river channel (synthetic geometry)",
                     "is_synthetic": True,
                 },
-                "geometry": polygon_to_geojson_dict(river_poly, epsg),
+                "geometry": polygon_to_geojson_dict(river_poly, 3857),
             }
         )
         parks = [
@@ -319,7 +320,7 @@ def get_study_area_context_geojson(
                 {
                     "type": "Feature",
                     "properties": {"feature_class": "park", "name": pname, "is_synthetic": True},
-                    "geometry": polygon_to_geojson_dict(poly, epsg),
+                    "geometry": polygon_to_geojson_dict(poly, 3857),
                 }
             )
 
@@ -588,8 +589,16 @@ def create_network_and_lixels(
     network_generator: str = "tehran_demo_v1",
 ) -> dict[str, Any]:
     """Populate a dataset's road network from a named seeded generator."""
-    builder = NETWORK_GENERATORS.get(network_generator, build_tehran_demo_network_spec)
-    nodes_spec, edges_spec = builder()
+    nodes_spec, edges_spec = generate_synthetic_network(network_generator)
+    epsg = _dataset_epsg(conn, dataset_id)
+    if epsg != 3857:
+        # The built-in geometry is authored in Web Mercator; transform every node and
+        # vertex before assigning the dataset CRS, never reinterpret the raw numbers.
+        node_coords = transform_coords([(n["x_m"], n["y_m"]) for n in nodes_spec], src_epsg=3857, dst_epsg=epsg)
+        for node, (x, y) in zip(nodes_spec, node_coords):
+            node["x_m"], node["y_m"] = float(x), float(y)
+        for edge in edges_spec:
+            edge["coords"] = [(float(x), float(y)) for x, y in transform_coords(edge["coords"], src_epsg=3857, dst_epsg=epsg)]
     return persist_network_spec(
         conn,
         dataset_id=dataset_id,

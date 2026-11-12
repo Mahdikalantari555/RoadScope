@@ -1,8 +1,6 @@
-"""Region-agnostic study areas, network ingestion and worldwide VGI acceptance.
+"""Study areas, network ingestion, CRS handling, and real-data safety guards.
 
-These tests pin the central promise of the `tehran-citizen-reporting` change: Tehran is a
-demo, not a limit. A new study area anywhere on Earth can be registered, its network imported
-from GeoJSON in any EPSG, and citizen reports can be submitted from anywhere.
+Worldwide network ingestion is experimental; real citizen report collection remains disabled.
 """
 from __future__ import annotations
 
@@ -338,3 +336,69 @@ def test_missing_exposure_gates_synthetic_risk(client: TestClient) -> None:
     response = client.post('/api/v1/risk/evaluate', json={'dataset_id': ds})
     assert response.status_code == 422
     assert 'exposure' in response.text
+
+
+def test_simulation_respects_dataset_crs_and_preserves_legacy_geometry(client: TestClient) -> None:
+    from app.db import db_session
+    from pyproj import Transformer
+    with db_session() as conn:
+        old = conn.execute('SELECT id, wkt_m FROM road_segments ORDER BY id LIMIT 1').fetchone()
+        old = (old['id'], old['wkt_m'])
+    area = client.post('/api/v1/study-areas', json={
+        'key': 'tehran_utm_test', 'name_en': 'Tehran UTM test', 'country_code': 'IR',
+        'canonical_epsg': 32639, 'center_4326': [51.389, 35.6892],
+    })
+    assert area.status_code == 200, area.text
+    simulation = client.post('/api/v1/simulator/generate', json={
+        'study_area_key': 'tehran_utm_test', 'network_generator': 'tehran_demo_v1',
+        'lixel_resolution_m': 100, 'random_seed': 17, 'study_period_years': 0.25,
+        'vgi_false_alarm_count': 1,
+    })
+    assert simulation.status_code == 200, simulation.text
+    with db_session() as conn:
+        row = conn.execute('SELECT id, crs_epsg FROM dataset_sources WHERE is_active=1').fetchone()
+        assert row['crs_epsg'] == 32639
+        ds = row['id']
+        node = conn.execute('SELECT x_m,y_m,lon,lat FROM road_nodes WHERE dataset_id=? LIMIT 1', (ds,)).fetchone()
+        assert 51 < node['lon'] < 52 and 35 < node['lat'] < 36
+        lon, lat = Transformer.from_crs(32639, 4326, always_xy=True).transform(node['x_m'], node['y_m'])
+        assert node['lon'] == pytest.approx(lon, abs=1e-6)
+        assert node['lat'] == pytest.approx(lat, abs=1e-6)
+        incidents = conn.execute('SELECT raw_x_m,raw_y_m,raw_lon,raw_lat,srid FROM accidents WHERE dataset_id=?', (ds,)).fetchall()
+        assert incidents
+        for inc in incidents:
+            lon, lat = Transformer.from_crs(32639, 4326, always_xy=True).transform(inc['raw_x_m'], inc['raw_y_m'])
+            assert inc['srid'] == 32639
+            assert inc['raw_lon'] == pytest.approx(lon, abs=1e-6)
+            assert inc['raw_lat'] == pytest.approx(lat, abs=1e-6)
+        previous = conn.execute('SELECT id,wkt_m FROM road_segments WHERE id=?', (old[0],)).fetchone()
+        assert (previous['id'], previous['wkt_m']) == old
+    meta = client.get('/api/v1/meta').json()
+    assert meta['study_area_key'] == 'tehran_utm_test'
+    river = next(feat for feat in meta['context_geojson']['features']
+                 if feat['properties'].get('feature_class') == 'river')
+    assert 51 < river['geometry']['coordinates'][0][0][0] < 52
+
+
+def test_tehran_generator_rejects_foreign_study_area(client: TestClient) -> None:
+    assert client.post('/api/v1/study-areas', json={'key': 'outside_test', 'name_en': 'Outside',
+        'center_4326': [4.8952, 52.3702]}).status_code == 200
+    response = client.post('/api/v1/simulator/generate', json={
+        'study_area_key': 'outside_test', 'network_generator': 'tehran_demo_v1'})
+    assert response.status_code == 422
+    assert 'cannot represent another study area' in response.text
+
+
+def test_imported_network_does_not_show_fictional_demo_river(client: TestClient) -> None:
+    result = client.post('/api/v1/ingest/network', json={'geojson': AMSTERDAM_LINE, 'activate': True})
+    assert result.status_code == 200, result.text
+    features = client.get('/api/v1/meta').json()['context_geojson']['features']
+    assert all(f['properties'].get('feature_class') not in ('river', 'park') for f in features)
+
+
+def test_invalid_generator_does_not_change_active_dataset(client: TestClient) -> None:
+    before = client.get('/api/v1/meta').json()['active_dataset']['id']
+    response = client.post('/api/v1/simulator/generate', json={'network_generator': 'not_a_generator'})
+    assert response.status_code == 422
+    assert 'Unknown synthetic network generator' in response.text
+    assert client.get('/api/v1/meta').json()['active_dataset']['id'] == before

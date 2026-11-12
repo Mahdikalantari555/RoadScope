@@ -10,7 +10,7 @@ import numpy as np
 from shapely.wkt import loads as wkt_loads
 
 from ..context import dataset_context
-from ..crs import interpolate_lrs_point, to_wgs84
+from ..crs import interpolate_lrs_point, to_wgs84, transform_coords
 from ..db import log_audit_event, utc_now_iso
 from .map_matching import (
     compute_single_report_credibility,
@@ -18,6 +18,7 @@ from .map_matching import (
 )
 from .network_generator import (
     TEHRAN_DEMO_ORIGIN_3857,
+    NETWORK_GENERATORS,
     create_network_and_lixels,
     invalidate_topology_cache,
 )
@@ -164,13 +165,19 @@ def run_stochastic_network_simulation(
         "study_period_years": study_period_years,
     }
 
-    if activate_dataset:
-        conn.execute("UPDATE dataset_sources SET is_active = 0")
-
     area = resolve_study_area(study_area_key)
     epsg = int(area.canonical_epsg)
-    generator = network_generator or area.network_generator
+    generator = network_generator or area.network_generator or "tehran_demo_v1"
+    if generator not in NETWORK_GENERATORS:
+        raise ValueError(f"Unknown synthetic network generator '{generator}'.")
+    if generator == "tehran_demo_v1" and (
+        abs(area.center_4326[0] - 51.389) > 0.5 or abs(area.center_4326[1] - 35.6892) > 0.5
+    ):
+        raise ValueError("The Tehran synthetic generator cannot represent another study area.")
     params.update({"study_area_key": area.key, "network_generator": generator})
+
+    if activate_dataset:
+        conn.execute("UPDATE dataset_sources SET is_active = 0")
 
     ds_name = (
         f"[SYNTHETIC] {meta['title']} · {area.name_en} "
@@ -249,6 +256,12 @@ def run_stochastic_network_simulation(
         "local_street": 0.45,
     }
 
+    hotspot_points = transform_coords(
+        [(x, y) for x, y, _, _ in DEMO_HOTSPOTS], src_epsg=3857, dst_epsg=epsg
+    )
+    hotspots = [(float(x), float(y), radius, boost)
+                for (x, y), (_, _, radius, boost) in zip(hotspot_points, DEMO_HOTSPOTS)]
+
     for r in lix_rows:
         lid = int(r["id"])
         sid = int(r["parent_segment_id"])
@@ -278,7 +291,7 @@ def run_stochastic_network_simulation(
             # intensity surface never depends on a hard-coded city.
             spatial_hotspot = 1.0
             mx, my = float(r["mid_x_m"]), float(r["mid_y_m"])
-            for hx, hy, radius_m, boost in DEMO_HOTSPOTS:
+            for hx, hy, radius_m, boost in hotspots:
                 if math.hypot(mx - hx, my - hy) < radius_m and elev == 0:
                     spatial_hotspot += boost
             lam = 3.4 * base_intensity_scale * class_mult.get(rclass, 1.0) * exposure_term * junc_term * geom_term * spatial_hotspot
@@ -339,7 +352,7 @@ def run_stochastic_network_simulation(
             gt_uid = f"GT-{dataset_id}-{lix['id']}-{ev_idx}"
             m_exact = float(rng.uniform(lix["m_start_m"], lix["m_end_m"]))
             tx_m, ty_m = interpolate_lrs_point(line, m_exact)
-            tlon, tlat = to_wgs84(tx_m, ty_m)
+            tlon, tlat = to_wgs84(tx_m, ty_m, epsg)
 
             # Sample timestamp with diurnal + weekly structure
             dow, hour_utc = _sample_diurnal_hour(rng, scenario_key)
@@ -387,7 +400,7 @@ def run_stochastic_network_simulation(
                 # Slight GPS jitter on raw coordinate (~3.5m), exact snapped geometry on network
                 rx_m = round(tx_m + float(rng.normal(0.0, 3.5)), 3)
                 ry_m = round(ty_m + float(rng.normal(0.0, 3.5)), 3)
-                rlon, rlat = to_wgs84(rx_m, ry_m)
+                rlon, rlat = to_wgs84(rx_m, ry_m, epsg)
                 d_ortho = round(math.hypot(tx_m - rx_m, ty_m - ry_m), 3)
 
                 cur_acc = conn.execute(
@@ -466,7 +479,7 @@ def run_stochastic_network_simulation(
                     c_uid, c_trust = citizen_users[(ev_idx + w_idx) % len(citizen_users)]
                     rx_m = round(tx_m + float(rng.normal(0.0, vgi_positional_sigma_m)), 3)
                     ry_m = round(ty_m + float(rng.normal(0.0, vgi_positional_sigma_m)), 3)
-                    rlon, rlat = to_wgs84(rx_m, ry_m)
+                    rlon, rlat = to_wgs84(rx_m, ry_m, epsg)
                     obs_rad = round(max(8.0, float(rng.uniform(12.0, 35.0))), 1)
 
                     # Witness temporal jitter & reporting lag
@@ -570,8 +583,10 @@ def run_stochastic_network_simulation(
         ),
     ]
     for idx_ov, (ox, oy, ocat, osev, onarr) in enumerate(overpass_demo_points):
+        if epsg != 3857:
+            ox, oy = transform_coords([(ox, oy)], src_epsg=3857, dst_epsg=epsg)[0]
         c_uid, c_trust = citizen_users[idx_ov % len(citizen_users)]
-        olon, olat = to_wgs84(ox, oy)
+        olon, olat = to_wgs84(ox, oy, epsg)
         cands = compute_topological_snap_candidates(
             conn,
             dataset_id=dataset_id,
@@ -655,7 +670,7 @@ def run_stochastic_network_simulation(
         ).fetchone()
         fx = round(float(rng.uniform(bbox["x0"], bbox["x1"])), 3)
         fy = round(float(rng.uniform(bbox["y0"], bbox["y1"])), 3)
-        flon, flat = to_wgs84(fx, fy)
+        flon, flat = to_wgs84(fx, fy, epsg)
         obs_rad = round(float(rng.uniform(38.0, 75.0)), 1)
         lag_min = round(float(rng.uniform(95.0, 420.0)), 1)
         occ_dt = end_dt - timedelta(days=int(rng.integers(2, 180)), hours=int(rng.integers(0, 24)))

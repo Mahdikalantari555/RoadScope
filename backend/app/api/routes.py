@@ -155,7 +155,9 @@ def get_platform_metadata() -> dict[str, Any]:
         "scenarios": [
             {"key": k, **v} for k, v in SCENARIO_METADATA.items()
         ],
-        "context_geojson": get_study_area_context_geojson(ctx, demo_network=ctx.study_area.network_generator if ctx.study_area else None),
+        "context_geojson": get_study_area_context_geojson(
+            ctx, demo_network=active_ds["generator_params"].get("network_generator") if active_ds else None
+        ),
     }
 
 
@@ -210,6 +212,8 @@ def generate_simulation_dataset(req: SimulationRequest) -> dict[str, Any]:
                 study_period_years=req.study_period_years,
                 activate_dataset=True,
                 actor_role=_trusted_role(req.actor_role),
+                study_area_key=req.study_area_key,
+                network_generator=req.network_generator,
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
