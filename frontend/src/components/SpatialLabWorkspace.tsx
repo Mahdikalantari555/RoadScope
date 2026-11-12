@@ -88,6 +88,13 @@ export const SpatialLabWorkspace: React.FC<SpatialLabWorkspaceProps> = ({
   const [topoSummary, setTopoSummary] = useState<Record<string, any> | null>(null);
   const [transportSummary, setTransportSummary] = useState<Record<string, any> | null>(null);
   const [benchResult, setBenchResult] = useState<Record<string, any> | null>(null);
+  const [netKResult, setNetKResult] = useState<Record<string, any> | null>(null);
+  const [voronoiResult, setVoronoiResult] = useState<Record<string, any> | null>(null);
+  const [hmmResult, setHmmResult] = useState<Record<string, any> | null>(null);
+  const [maupResult, setMaupResult] = useState<Record<string, any> | null>(null);
+  const [stGraphResult, setStGraphResult] = useState<Record<string, any> | null>(null);
+  const [textAblationResult, setTextAblationResult] = useState<Record<string, any> | null>(null);
+  const [consentVerified, setConsentVerified] = useState<boolean>(true);
 
   // Covariates & Job Provenance
   const [covariates, setCovariates] = useState<Record<string, any> | null>(null);
@@ -264,6 +271,82 @@ export const SpatialLabWorkspace: React.FC<SpatialLabWorkspaceProps> = ({
       setBenchResult(res.result);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Benchmark failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const executeNetworkK = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await uaiApi.runResearchNetworkK({
+        dataset_id: datasetId,
+        max_radius_m: 350,
+        n_radii: 8,
+        n_simulations: 19,
+        random_seed: 42,
+      });
+      setNetKResult(res.result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Network K failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const executeVoronoiAndHmm = async (which: 'voronoi' | 'hmm') => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (which === 'voronoi') {
+        const res = await uaiApi.runResearchVoronoi({ dataset_id: datasetId });
+        setVoronoiResult(res.result);
+      } else {
+        const res = await uaiApi.runResearchTrajectoryHmm({
+          dataset_id: datasetId,
+          synthetic_steps: 5,
+          transition_scale_m: 100.0,
+          random_seed: 42,
+        });
+        setHmmResult(res.result);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Primitive execution failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const executeMaupSuite = async (which: 'maup' | 'stgraph' | 'text') => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (which === 'maup') {
+        const res = await uaiApi.runResearchMaupSensitivity({
+          dataset_id: datasetId,
+          resolutions_m: [10.0, 25.0, 50.0],
+          seeds: [17, 42, 89],
+          bandwidth_m: bandwidthM,
+        });
+        setMaupResult(res.result);
+      } else if (which === 'stgraph') {
+        const res = await uaiApi.runResearchStGraph({
+          dataset_id: datasetId,
+          n_periods: 8,
+          seeds: [11, 29, 47],
+        });
+        setStGraphResult(res.result);
+      } else {
+        const res = await uaiApi.runResearchTextAblation({
+          dataset_id: datasetId,
+          consent_verified: consentVerified,
+          random_seed: 42,
+        });
+        setTextAblationResult(res.result);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Benchmark execution failed');
     } finally {
       setBusy(false);
     }
@@ -884,6 +967,140 @@ export const SpatialLabWorkspace: React.FC<SpatialLabWorkspaceProps> = ({
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </div>
+
+          {/* Advanced Network Point-Process & Trajectory Primitives */}
+          <div className={`${cardCls} space-y-2`}>
+            <div className="font-semibold text-purple-300">{copy.advNetTitle}</div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={executeNetworkK}
+                className="py-1.5 px-2 rounded border border-purple-500/60 bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 font-semibold text-[10.5px]"
+              >
+                {copy.runNetK}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => executeVoronoiAndHmm('voronoi')}
+                className="py-1.5 px-2 rounded border border-cyan-500/60 bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 font-semibold text-[10.5px]"
+              >
+                {copy.runVoronoi}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => executeVoronoiAndHmm('hmm')}
+                className="py-1.5 px-2 rounded border border-amber-500/60 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 font-semibold text-[10.5px]"
+              >
+                {copy.runHmm}
+              </button>
+            </div>
+            {netKResult && (
+              <div dir="ltr" className="p-2 rounded bg-slate-950/75 border border-slate-800 font-mono text-[10.5px]">
+                Inhom. K/L (n={netKResult.event_count}): DCLF p ={' '}
+                <b className="text-purple-300">{netKResult.dclf_global_p_value}</b> · Exceeds 95% env:{' '}
+                <b>{String(netKResult.exceeds_upper_envelope)}</b>
+              </div>
+            )}
+            {voronoiResult && (
+              <div dir="ltr" className="p-2 rounded bg-slate-950/75 border border-slate-800 font-mono text-[10.5px]">
+                Voronoi seeds: <b>{voronoiResult.event_seeds}</b> · Peak:{' '}
+                <b className="text-cyan-300">{voronoiResult.max_voronoi_per_km}/km</b> · Median:{' '}
+                <b>{voronoiResult.median_voronoi_per_km}/km</b>
+              </div>
+            )}
+            {hmmResult && (
+              <div dir="ltr" className="p-2 rounded bg-slate-950/75 border border-slate-800 font-mono text-[10.5px]">
+                Viterbi HMM ({hmmResult.fix_count} fixes): exact recovery ={' '}
+                <b className="text-amber-300">{(hmmResult.exact_state_recovery_rate ?? 0) * 100}%</b> · logScore={' '}
+                {hmmResult.log_score?.toFixed(2)}
+              </div>
+            )}
+          </div>
+
+          {/* Multi-Seed MAUP Sensitivity, ZINB-STGraph & Consent-Gated Narrative Ablation */}
+          <div className={`${cardCls} space-y-2`}>
+            <div className="font-semibold text-emerald-300">{copy.maupTitle}</div>
+            <div className="flex flex-col gap-1.5">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => executeMaupSuite('maup')}
+                className="w-full py-1.5 px-2 rounded border border-emerald-500/60 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 font-semibold text-[10.5px]"
+              >
+                {copy.runMaup}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => executeMaupSuite('stgraph')}
+                className="w-full py-1.5 px-2 rounded border border-cyan-500/60 bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 font-semibold text-[10.5px]"
+              >
+                {copy.runStGraph}
+              </button>
+              <label className="flex items-center gap-1.5 text-[10.5px] pt-1">
+                <input
+                  type="checkbox"
+                  checked={consentVerified}
+                  onChange={(e) => setConsentVerified(e.target.checked)}
+                />
+                {copy.consentLabel}
+              </label>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => executeMaupSuite('text')}
+                className="w-full py-1.5 px-2 rounded border border-amber-500/60 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 font-semibold text-[10.5px]"
+              >
+                {copy.runTextAblation}
+              </button>
+            </div>
+            {maupResult && (
+              <div dir="ltr" className="p-2 rounded bg-slate-950/75 border border-slate-800 font-mono text-[10px] space-y-1">
+                <div className="text-emerald-300 font-semibold truncate" title={maupResult.zoning_sensitivity_note}>
+                  {maupResult.zoning_sensitivity_note}
+                </div>
+                {maupResult.resolutions?.map((rRow: any) => (
+                  <div key={rRow.lixel_resolution_m} className="flex justify-between">
+                    <span>
+                      {rRow.lixel_resolution_m}m ({rRow.lixel_count} lx)
+                    </span>
+                    <span>AU-PAI: {rRow.au_pai?.mean}±{rRow.au_pai?.ci95_halfwidth}</span>
+                    <span>
+                      {rRow.runtime_ms}ms / {rRow.peak_memory_kb}KB
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {stGraphResult && (
+              <div dir="ltr" className="p-2 rounded bg-slate-950/75 border border-slate-800 font-mono text-[10px] space-y-0.5">
+                {stGraphResult.comparisons?.map((bRow: any) => (
+                  <div key={bRow.method} className="flex justify-between">
+                    <span>{bRow.method}</span>
+                    <span className="text-cyan-300">AU-PAI: {bRow.au_pai}</span>
+                    <span>RMSE: {bRow.test_rmse}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {textAblationResult && (
+              <div dir="ltr" className="p-2 rounded bg-slate-950/75 border border-slate-800 font-mono text-[10px] space-y-0.5">
+                <div className="text-amber-300">
+                  Encoder: {textAblationResult.embedding_version} (ΔLogScore: {textAblationResult.text_lift_log_score})
+                </div>
+                {textAblationResult.ablations?.map((ab: any) => (
+                  <div key={ab.variant} className="flex justify-between">
+                    <span>{ab.variant}</span>
+                    <span>AU-PAI: {ab.au_pai}</span>
+                    <span>LogS: {ab.holdout_mean_log_score}</span>
+                  </div>
+                ))}
               </div>
             )}
           </div>

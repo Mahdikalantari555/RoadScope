@@ -46,7 +46,9 @@ def test_forged_roles_no_mutation(client):
 
 def test_research_contract_validation_and_export(client):
     headers = {"Authorization": "Bearer test-steward-secret"}
-    assert client.get("/api/v1/research/capabilities").json()["unavailable"]["bym2"]
+    caps = client.get("/api/v1/research/capabilities").json()
+    assert "bym2_spatial_mcmc_and_vgi_mi" in caps["available"]
+    assert caps["unavailable"]["external_cloud_llm_narratives"]
     assert (
         client.post(
             "/api/v1/research/pai",

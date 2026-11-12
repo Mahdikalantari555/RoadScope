@@ -40,6 +40,10 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
   const [crashCostK, setCrashCostK] = useState(22);
   const [evpiResult, setEvpiResult] = useState<Record<string, any> | null>(null);
   const [surrogates, setSurrogates] = useState<Record<string, any> | null>(null);
+  const [bym2Result, setBym2Result] = useState<Record<string, any> | null>(null);
+  const [jointLnResult, setJointLnResult] = useState<Record<string, any> | null>(null);
+  const [surrogateFusion, setSurrogateFusion] = useState<Record<string, any> | null>(null);
+  const [advBusy, setAdvBusy] = useState(false);
 
   const recompute = async (eb = wEb, ep = wEpdo, gm = wGeom, ev = wEnv) => {
     setLoading(true);
@@ -90,6 +94,54 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
       horizon_years: 1.0,
     });
     setEvpiResult({ ...res, corridorName: top.name });
+  };
+
+  const executeBym2 = async () => {
+    setAdvBusy(true);
+    try {
+      const res = await uaiApi.runResearchBym2({
+        dataset_id: datasetId,
+        imputations_m: 10,
+        chains: 4,
+        draws_per_chain: 160,
+        random_seed: 42,
+      });
+      setBym2Result(res.result);
+    } finally {
+      setAdvBusy(false);
+    }
+  };
+
+  const executeJointLinkNode = async () => {
+    setAdvBusy(true);
+    try {
+      const res = await uaiApi.runResearchJointLinkNode({
+        dataset_id: datasetId,
+        junction_buffer_m: 22.0,
+        chains: 3,
+        draws_per_chain: 140,
+        random_seed: 42,
+      });
+      setJointLnResult(res.result);
+    } finally {
+      setAdvBusy(false);
+    }
+  };
+
+  const executeSurrogateFusion = async () => {
+    setAdvBusy(true);
+    try {
+      const res = await uaiApi.runResearchSurrogateJoint({
+        dataset_id: datasetId,
+        seed_synthetic_if_empty: true,
+        random_seed: 42,
+      });
+      setSurrogateFusion(res.result);
+      const surr = await uaiApi.getSurrogates(datasetId).catch(() => null);
+      if (surr) setSurrogates(surr);
+    } finally {
+      setAdvBusy(false);
+    }
   };
 
   const metricButtons: { mode: MapOverlayMode; short: string; desc: string }[] = [
@@ -381,10 +433,63 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
             )}
           </div>
 
-          {/* Surrogate Safety Coverage Summary */}
-          {surrogates && (
-            <div className={`${cardCls} space-y-1.5`}>
-              <div className="font-semibold text-amber-300">{copy.surrogateTitle}</div>
+          {/* Spatial Hierarchical BYM2 MCMC, Rubin VGI Multiple Imputation & Joint Link-Node */}
+          <div className={`${cardCls} space-y-2`}>
+            <div className="font-semibold text-cyan-300">{copy.bym2Title}</div>
+            <p className="text-[10px] opacity-75">{copy.bym2Desc}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={advBusy}
+                onClick={executeBym2}
+                className="py-1.5 px-2 rounded bg-cyan-500/20 border border-cyan-400/60 hover:bg-cyan-500/30 text-cyan-200 font-semibold disabled:opacity-50"
+              >
+                {copy.runBym2}
+              </button>
+              <button
+                type="button"
+                disabled={advBusy}
+                onClick={executeJointLinkNode}
+                className="py-1.5 px-2 rounded bg-purple-500/20 border border-purple-400/60 hover:bg-purple-500/30 text-purple-200 font-semibold disabled:opacity-50"
+              >
+                {copy.runJointLinkNode}
+              </button>
+            </div>
+            {bym2Result && (
+              <div className="p-2 rounded bg-slate-950/80 border border-slate-800 space-y-1 font-mono text-[10.5px]">
+                <div dir="ltr" className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div>
+                    R̂_max: <b className="text-emerald-300">{bym2Result.bym2?.diagnostics?.max_split_rhat}</b>
+                  </div>
+                  <div>
+                    ESS_min: <b className="text-cyan-300">{bym2Result.bym2?.diagnostics?.min_bulk_ess}</b>
+                  </div>
+                  <div>
+                    ρ_Riebler: <b>{bym2Result.bym2?.rho_spatial_mixing}</b>
+                  </div>
+                  <div>
+                    FMI_Rubin: <b className="text-amber-300">{bym2Result.vgi_multiple_imputation?.mean_fmi}</b>
+                  </div>
+                </div>
+              </div>
+            )}
+            {jointLnResult && (
+              <div dir="ltr" className="p-2 rounded bg-slate-950/80 border border-slate-800 font-mono text-[10.5px] flex justify-between">
+                <span>
+                  Links: <b>{jointLnResult.link_count}</b> · Nodes: <b>{jointLnResult.node_count}</b> (Junction N=
+                  <b>{jointLnResult.total_junction_crashes}</b>)
+                </span>
+                <span className="text-purple-300">
+                  ΔLogScore: <b>{jointLnResult.comparison_vs_segment_bym2?.delta_log_score}</b>
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Surrogate Safety Coverage Summary & Bivariate Poisson-Lognormal Fusion */}
+          <div className={`${cardCls} space-y-2`}>
+            <div className="font-semibold text-amber-300">{copy.surrogateTitle}</div>
+            {surrogates && (
               <div className="grid grid-cols-3 gap-2 font-mono text-[10.5px]">
                 <div>
                   {copy.uncoveredSegs}: <b>{surrogates.uncovered_segments}</b>
@@ -396,8 +501,29 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
                   {copy.posConflictSegs}: <b className="text-emerald-300">{surrogates.covered_positive_conflict_segments}</b>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+            <button
+              type="button"
+              disabled={advBusy}
+              onClick={executeSurrogateFusion}
+              className="w-full py-1.5 rounded bg-amber-500/20 border border-amber-400/60 hover:bg-amber-500/30 text-amber-200 font-semibold disabled:opacity-50"
+            >
+              {copy.surrogateFusionBtn}
+            </button>
+            {surrogateFusion && (
+              <div className="p-2 rounded bg-slate-950/80 border border-slate-800 font-mono text-[10.5px] flex flex-wrap justify-between gap-2">
+                <span>
+                  {copy.latentRho}:{' '}
+                  <b className="text-amber-300">{surrogateFusion.model?.latent_correlation_rho}</b> (R̂=
+                  {surrogateFusion.model?.diagnostics?.max_split_rhat})
+                </span>
+                <span dir="ltr">
+                  RMSE: <b className="text-emerald-300">{surrogateFusion.held_out_evaluation?.joint_bivariate_pln?.latent_mu_rmse}</b>{' '}
+                  vs {surrogateFusion.held_out_evaluation?.exposure_only_spf?.latent_mu_rmse}
+                </span>
+              </div>
+            )}
+          </div>
 
           {/* Ranked Corridor Priority Table */}
           <div className={cardCls}>

@@ -243,4 +243,58 @@ export const uaiApi = {
 
   getSurrogates: (datasetId?: number) =>
     apiJson<Record<string, any>>(`/api/v1/research/surrogates${datasetId ? `?dataset_id=${datasetId}` : ''}`),
+
+  runResearchBym2: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/bym2', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchJointLinkNode: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/joint-link-node', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchSurrogateJoint: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/surrogate-joint', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchNetworkK: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/network-k', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchVoronoi: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/voronoi', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchTrajectoryHmm: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/trajectory-hmm', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchStGraph: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/st-graph', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchTextAblation: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/text-ablation', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  runResearchMaupSensitivity: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/research/maup-sensitivity', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
