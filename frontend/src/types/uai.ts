@@ -250,8 +250,21 @@ export interface RiskCorridorRow {
   bivariate_color: string;
 }
 
+export interface CureDiagnostic {
+  status: 'ok' | 'insufficient_aadt_variation';
+  method: string;
+  envelope: string;
+  assumptions: string;
+  model: string;
+  sample_size: number;
+  imputed_aadt_count: number;
+  unit: string;
+  points: { aadt: number; segment_count: number; cumulative_residual: number; lower: number; upper: number }[];
+}
+
 export interface RiskEbPayload {
   crs_epsg: number;
+  cure_diagnostic: CureDiagnostic;
   metric_epistemology_disclaimer: string;
   normalized_weights: {
     w_eb_risk: number;

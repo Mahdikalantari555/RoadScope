@@ -17,3 +17,6 @@ __pycache__/
 .config/
 .sudo_as_admin_successful
 .DS_Store
+
+# Database backups created before schema migrations
+**/backups/*.sqlite

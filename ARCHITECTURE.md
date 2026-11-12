@@ -1,4 +1,4 @@
-> **Current implementation note:** RoadScope currently runs against SQLite in `backend/app/db.py`; the Compose PostGIS service is not connected to the backend. Client-supplied roles are not secure authentication. See [implementation plan](IMPLEMENTATION_PLAN_FA.md) for the migration and security work.
+> **Current implementation note:** RoadScope currently runs against SQLite in `backend/app/db.py`; Compose no longer provisions the previously unused PostGIS service. Client-supplied roles are not secure authentication. See [implementation plan](IMPLEMENTATION_PLAN_FA.md) for the migration and security work.
 
 # Urban Accident Intelligence (UAI) Research Platform
 ## System Architecture & Geomatics Mathematical Formulation Reference
@@ -14,13 +14,13 @@
    - **React 18 + TypeScript + MapLibre GL JS (WebGL2)** delivering Coordinated Multiple Views (CMV) with bidirectional linked brushing across vector network layers, temporal brushes, $7 \times 24$ diurnal matrices, Empirical Bayes shrinkage plots, and $3 \times 3$ bivariate risk–uncertainty cartography.
    - Zero-external-dependency self-contained vector cartographic context (Main River hydrography, urban blocks, metric graticules, grade-separated road casings) in both Dark Intelligence and Light Publication themes.
 2. **RESTful & OGC GeoJSON Contract Tier (`backend/app/api/`):**
-   - **FastAPI + Pydantic v2** enforcing strict schema validation, role-based access control (`simulation_scientist`, `citizen_reporter`, `data_steward`, `gis_researcher`, `safety_engineer`, `mobility_analyst`), asynchronous/background geoprocessing job tracking (`spatial_analysis_jobs`), and open geospatial exports (`GeoJSON`, `CSV`).
+   - **FastAPI + Pydantic v2** provides schema validation, client-supplied role checks (not secure authorization), persisted analysis records (`spatial_analysis_jobs`), and geospatial exports (`GeoJSON`, `CSV`).
 3. **Computational Spatial Statistics & Graph Engine (`backend/app/services/`):**
    - **NumPy + SciPy (`csgraph.dijkstra`, sparse linear algebra) + NetworkX + Shapely 2.0 (GEOS) + PyProj (PROJ 9.6)**.
    - Operates strictly in metric projected space (`EPSG:25832` — ETRS89 / UTM Zone 32N, meters) over a Linear Referencing System (LRS) and Lixel Dual Graph $G_{\mathcal{L}} = (\mathcal{L}, A_{\mathcal{L}})$, transforming to `EPSG:4326` (WGS84) exclusively at the GeoJSON serialization boundary.
 4. **Relational-Spatial Persistence Tier (`migrations/`, `backend/app/db.py`):**
    - Normalized 15-table relational-spatial schema with explicit SRID enforcement (`25832` canonical metric, `4326` serialization), R\*Tree / GiST spatial indexes on nodes, segments, lixels, raw VGI coordinates, and snapped network coordinates, plus UTC temporal B-Tree/BRIN indexes.
-   - Dual-runtime persistence: PostGIS 16-3.4 (`migrations/001_postgis_schema.sql` via `docker-compose.yml`) and embedded SpatiaLite 5.1 + SQLite R\*Tree (`migrations/002_spatialite_schema.sql`) for persistent self-contained sandbox execution.
+   - Runtime persistence uses SQLite R\*Tree with optional SpatiaLite (`migrations/002_spatialite_schema.sql`). The PostGIS schema is a reference only; the backend does not have a PostGIS adapter.
 
 ---
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, RefreshCw, ShieldAlert, SlidersHorizontal } from 'lucide-react';
 import { uaiApi } from '../api/client';
+import { CureChart } from './CureChart';
 import type { MapOverlayMode, RiskEbPayload } from '../types/uai';
 
 interface RiskEbWorkspaceProps {
@@ -204,6 +205,12 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
               </div>
             </div>
           </div>
+
+          {riskData.cure_diagnostic && (
+            <div className={cardCls}>
+              <CureChart diagnostic={riskData.cure_diagnostic} />
+            </div>
+          )}
 
           {/* Ranked Corridor Priority Table */}
           <div className={cardCls}>

@@ -19,6 +19,7 @@ from ..crs import (
     polygon_25832_to_geojson_dict,
 )
 from ..db import log_audit_event, utc_now_iso
+from .benchmark_curves import pai_curve
 from .network_generator import (
     LixelNetworkTopology,
     exact_network_distance_between_snapped_points,
@@ -121,6 +122,13 @@ def evaluate_against_ground_truth(
         "rmse_per_km_yr": round(float(rmse), 4),
         "nrmse": round(float(nrmse), 4),
         "spearman_rho": round(float(rho), 4),
+        # The legacy point PAI above uses whole lixels; the curve uses fractional
+        # length and must not be interpreted as an out-of-sample evaluation.
+        "pai_curve": {
+            **pai_curve(estimated_intensity_per_km, lengths_m, true_expected_counts),
+            "event_mass_source": "synthetic expected intensity times lixel length",
+            "evaluation_scope": "in-sample synthetic ground truth; not held-out prediction",
+        },
     }
 
 

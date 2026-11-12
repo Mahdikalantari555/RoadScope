@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Calendar, FilterX, Flame, Layers3, Navigation } from 'lucide-react';
 import type { CmvFilterState, CmvStatePayload } from '../types/uai';
+import { useLanguage } from '../i18n';
+import { analyticsText, dayLabels, domainLabel, formatNumber } from '../analyticsI18n';
 
 interface AnalyticsWorkspaceProps {
   darkMode: boolean;
@@ -11,8 +13,6 @@ interface AnalyticsWorkspaceProps {
   onFlyToSegment: (segmentId: number) => void;
 }
 
-const DOW_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
 export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
   darkMode,
   cmvData,
@@ -21,12 +21,16 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
   onResetAllFilters,
   onFlyToSegment,
 }) => {
+  const { language } = useLanguage();
+  const copy = analyticsText(language);
+  const days = dayLabels(language);
+  const n = (value: number) => formatNumber(language, value);
   const [brushStartIdx, setBrushStartIdx] = useState<number | null>(null);
 
   if (!cmvData) {
     return (
       <div className="p-6 text-xs font-mono text-slate-400">
-        Synchronizing Coordinated Multiple Views (CMV)...
+        {copy.loading}
       </div>
     );
   }
@@ -91,14 +95,15 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
         <div>
           <h2 className="font-semibold text-sm flex items-center gap-1.5">
             <Layers3 className="w-4 h-4 text-cyan-400" />
-            Coordinated Geovisual Analytics (CMV)
+            {copy.title}
           </h2>
           <p className="text-[11px] opacity-70">
-            Bidirectional linked brushing across map polygons, timeline, diurnal matrix &amp; corridors
+            {copy.subtitle}
           </p>
         </div>
         <div className="flex items-center gap-1.5">
           <select
+            aria-label={copy.verification}
             value={filters.verification_mode}
             onChange={(e) =>
               onUpdateFilters({
@@ -109,16 +114,16 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
               darkMode ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-slate-50 border-slate-300'
             }`}
           >
-            <option value="verified_only">Confirmed Canonical Only</option>
-            <option value="all_active">Confirmed + Unverified VGI</option>
-            <option value="vgi_queue">Unverified VGI Triage Only</option>
+            <option value="verified_only">{copy.verified}</option>
+            <option value="all_active">{copy.all}</option>
+            <option value="vgi_queue">{copy.queue}</option>
           </select>
           {hasAnyFilter && (
             <button
               onClick={onResetAllFilters}
               className="px-2 py-1 rounded bg-rose-500/20 border border-rose-500/50 text-rose-300 hover:bg-rose-500/30 flex items-center gap-1 text-[11px] font-mono"
             >
-              <FilterX className="w-3 h-3" /> Reset
+              <FilterX className="w-3 h-3" /> {copy.reset}
             </button>
           )}
         </div>
@@ -127,22 +132,22 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
       {/* KPI Strip */}
       <div className="grid grid-cols-3 gap-2 font-mono tabular-nums">
         <div className={cardCls}>
-          <div className="text-[10px] uppercase opacity-65">Active Incidents</div>
-          <div className="text-lg font-bold text-cyan-400">{kpis.filtered_incidents}</div>
-          <div className="text-[10px] opacity-70">Credibility μ={kpis.mean_credibility}</div>
+          <div className="text-[10px] uppercase opacity-65">{copy.incidents}</div>
+          <div className="text-lg font-bold text-cyan-400">{n(kpis.filtered_incidents)}</div>
+          <div className="text-[10px] opacity-70">{copy.credibility}: <bdi>{n(kpis.mean_credibility)}</bdi></div>
         </div>
         <div className={cardCls}>
-          <div className="text-[10px] uppercase opacity-65">EPDO Severity Sum</div>
-          <div className="text-lg font-bold text-amber-400">{kpis.total_epdo}</div>
-          <div className="text-[10px] opacity-70">HSM Weighted Index</div>
+          <div className="text-[10px] uppercase opacity-65">{copy.severitySum}</div>
+          <div className="text-lg font-bold text-amber-400">{n(kpis.total_epdo)}</div>
+          <div className="text-[10px] opacity-70">{copy.weightedIndex}</div>
         </div>
         <div className={cardCls}>
-          <div className="text-[10px] uppercase opacity-65">KSI (Severe/Fatal)</div>
+          <div className="text-[10px] uppercase opacity-65">{copy.ksi}</div>
           <div className="text-lg font-bold text-rose-400">
-            {kpis.ksi_severe_fatal_count}{' '}
-            <span className="text-xs font-normal">({kpis.ksi_share_pct}%)</span>
+            {n(kpis.ksi_severe_fatal_count)}{' '}
+            <span className="text-xs font-normal">(<bdi>{n(kpis.ksi_share_pct)}%</bdi>)</span>
           </div>
-          <div className="text-[10px] opacity-70">Mean Snap d⊥={kpis.mean_snap_drift_m}m</div>
+          <div className="text-[10px] opacity-70">{copy.drift}: <bdi>{n(kpis.mean_snap_drift_m)}</bdi> {copy.meters}</div>
         </div>
       </div>
 
@@ -151,26 +156,29 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
         <div className="flex items-center justify-between mb-2">
           <span className="font-semibold flex items-center gap-1.5">
             <Calendar className="w-3.5 h-3.5 text-cyan-400" />
-            Temporal Trajectory &amp; Interactive Window Brush
+            {copy.timeline}
           </span>
           <span className="text-[10px] font-mono opacity-75">
             {brushStartIdx !== null
-              ? 'Click end week to apply window...'
+              ? copy.chooseEnd
               : filters.start_utc
-              ? `${filters.start_utc.slice(0, 10)} → ${filters.end_utc?.slice(0, 10)}`
-              : 'Click any two weeks to brush'}
+              ? <bdi dir="ltr">{filters.start_utc.slice(0, 10)} → {filters.end_utc?.slice(0, 10)}</bdi>
+              : copy.chooseWeeks}
           </span>
         </div>
-        <div className="h-24 flex items-end gap-[2px] pt-2">
+        <div dir="ltr" className="h-24 flex items-end gap-[2px] pt-2">
           {weekly_series.map((w, idx) => {
             const totalPct = (w.total_count / maxWeekTotal) * 100;
             const selPct = (w.selected_count / maxWeekTotal) * 100;
             const isAnchor = brushStartIdx === idx;
             return (
-              <div
+              <button
+                type="button"
                 key={w.week_start}
                 onClick={() => handleWeekClick(idx)}
-                title={`Week of ${w.week_start}: ${w.selected_count} selected / ${w.total_count} baseline`}
+                aria-pressed={isAnchor}
+                aria-label={`${copy.weekOf} ${w.week_start}: ${n(w.selected_count)} ${copy.selected} / ${n(w.total_count)} ${copy.baseline}`}
+                title={`${copy.weekOf} ${w.week_start}: ${n(w.selected_count)} ${copy.selected} / ${n(w.total_count)} ${copy.baseline}`}
                 className={`flex-1 h-full flex flex-col justify-end cursor-pointer group relative ${
                   isAnchor ? 'ring-1 ring-amber-400' : ''
                 }`}
@@ -184,14 +192,15 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
                     style={{ height: `${w.total_count > 0 ? (selPct / Math.max(1, totalPct)) * 100 : 0}%` }}
                   />
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
-        <div className="flex justify-between text-[10px] font-mono opacity-60 mt-1">
-          <span>{weekly_series[0]?.week_start}</span>
-          <span>52-Week Study Horizon (UTC)</span>
-          <span>{weekly_series[weekly_series.length - 1]?.week_start}</span>
+        {weekly_series.length === 0 && <p className="text-[11px] opacity-70">{copy.emptyWeeks}</p>}
+        <div dir="ltr" className="flex justify-between text-[10px] font-mono opacity-60 mt-1">
+          <span><bdi dir="ltr">{weekly_series[0]?.week_start}</bdi></span>
+          <span>{copy.studyHorizon}</span>
+          <span><bdi dir="ltr">{weekly_series[weekly_series.length - 1]?.week_start}</bdi></span>
         </div>
       </div>
 
@@ -200,22 +209,22 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
         <div className="flex items-center justify-between mb-1.5">
           <span className="font-semibold flex items-center gap-1.5">
             <Flame className="w-3.5 h-3.5 text-amber-400" />
-            7×24 Diurnal × Weekly Spatiotemporal Matrix
+            {copy.matrix}
           </span>
           {(filters.dow_filter !== null || filters.hour_filter !== null) && (
             <button
               onClick={() => onUpdateFilters({ dow_filter: null, hour_filter: null })}
               className="text-[10px] font-mono text-cyan-400 hover:underline"
             >
-              Clear Cell ({DOW_LABELS[filters.dow_filter ?? 0]} {filters.hour_filter}:00)
+              {copy.clearCell} (<bdi>{days[filters.dow_filter ?? 0]} {filters.hour_filter}:00 UTC</bdi>)
             </button>
           )}
         </div>
         <div className="space-y-0.5 font-mono">
           {diurnal_matrix.map((row, dowIdx) => (
             <div key={dowIdx} className="flex items-center gap-1">
-              <span className="w-7 text-[10px] opacity-70">{DOW_LABELS[dowIdx]}</span>
-              <div className="flex-1 grid gap-[2px]" style={{ gridTemplateColumns: 'repeat(24, minmax(0, 1fr))' }}>
+              <span className="w-16 text-[10px] opacity-70 truncate">{days[dowIdx]}</span>
+              <div dir="ltr" className="flex-1 grid gap-[2px]" style={{ gridTemplateColumns: 'repeat(24, minmax(0, 1fr))' }}>
                 {row.map((cnt, hrIdx) => {
                   const intensity = cnt / maxDiurnal;
                   const isSel = filters.dow_filter === dowIdx && filters.hour_filter === hrIdx;
@@ -235,7 +244,9 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
                             : { dow_filter: dowIdx, hour_filter: hrIdx }
                         )
                       }
-                      title={`${DOW_LABELS[dowIdx]} ${String(hrIdx).padStart(2, '0')}:00 UTC — ${cnt} crashes`}
+                      aria-pressed={isSel}
+                      aria-label={`${days[dowIdx]} ${String(hrIdx).padStart(2, '0')}:00 UTC — ${n(cnt)} ${copy.crashes}`}
+                      title={`${days[dowIdx]} ${String(hrIdx).padStart(2, '0')}:00 UTC — ${n(cnt)} ${copy.crashes}`}
                       style={{ backgroundColor: bg }}
                       className={`h-3.5 rounded-[2px] transition-transform hover:scale-125 ${
                         isSel ? 'ring-2 ring-cyan-300 z-10' : ''
@@ -246,12 +257,12 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
               </div>
             </div>
           ))}
-          <div className="flex justify-between pl-8 text-[9px] opacity-60 pt-0.5">
+          <div dir="ltr" className="flex justify-between ps-16 text-[9px] opacity-60 pt-0.5">
             <span>00h</span>
             <span>06h</span>
-            <span>08h Rush</span>
+            <span>08h {copy.rush}</span>
             <span>12h</span>
-            <span>17h Rush</span>
+            <span>17h {copy.rush}</span>
             <span>23h</span>
           </div>
         </div>
@@ -260,7 +271,8 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
       {/* 3. Interactive Severity & Taxonomy Cross-Filters */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
         <div className={cardCls}>
-          <div className="font-semibold mb-2">Severity Breakdown (Click Filter)</div>
+          <div className="font-semibold mb-2">{copy.severity}</div>
+          {severity_breakdown.length === 0 && <p className="text-[11px] opacity-70">{copy.emptySeverity}</p>}
           <div className="space-y-1.5">
             {severity_breakdown.map((sv) => {
               const active =
@@ -268,6 +280,7 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
               return (
                 <button
                   key={sv.code}
+                  aria-pressed={filters.severity_codes.includes(sv.code)}
                   onClick={() => toggleSeverity(sv.code)}
                   className={`w-full text-left px-2 py-1 rounded border transition-opacity flex items-center justify-between ${
                     active ? 'opacity-100 border-slate-700/80' : 'opacity-40 border-transparent'
@@ -275,10 +288,10 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
                 >
                   <span className="flex items-center gap-1.5 truncate">
                     <i className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: sv.color }} />
-                    <span className="truncate">{sv.label}</span>
+                    <span className="truncate">{domainLabel(language, sv.code, sv.label)}</span>
                   </span>
                   <span className="font-mono tabular-nums text-[11px] shrink-0">
-                    <b>{sv.count}</b> <span className="opacity-60">(EPDO {sv.epdo_sum})</span>
+                    <b>{n(sv.count)}</b> <span className="opacity-60">(EPDO {n(sv.epdo_sum)})</span>
                   </span>
                 </button>
               );
@@ -287,7 +300,8 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
         </div>
 
         <div className={cardCls}>
-          <div className="font-semibold mb-2">Collision Taxonomy (Click Filter)</div>
+          <div className="font-semibold mb-2">{copy.taxonomy}</div>
+          {taxonomy_breakdown.length === 0 && <p className="text-[11px] opacity-70">{copy.emptyCategories}</p>}
           <div className="space-y-1.5">
             {taxonomy_breakdown.map((cat) => {
               const active =
@@ -296,14 +310,15 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
               return (
                 <button
                   key={cat.code}
+                  aria-pressed={filters.category_codes.includes(cat.code)}
                   onClick={() => toggleCategory(cat.code)}
                   className={`w-full text-left space-y-0.5 transition-opacity ${
                     active ? 'opacity-100' : 'opacity-40'
                   }`}
                 >
                   <div className="flex justify-between text-[11px]">
-                    <span className="truncate pr-2">{cat.label}</span>
-                    <span className="font-mono tabular-nums font-semibold">{cat.count}</span>
+                    <span className="truncate pr-2">{domainLabel(language, cat.code, cat.label)}</span>
+                    <span className="font-mono tabular-nums font-semibold">{n(cat.count)}</span>
                   </div>
                   <div className="h-1.5 w-full bg-slate-800 rounded overflow-hidden">
                     <div className="h-full bg-cyan-400" style={{ width: `${pct}%` }} />
@@ -318,14 +333,15 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
       {/* 4. Top Hazardous Road Segments Table */}
       <div className={cardCls}>
         <div className="flex items-center justify-between mb-2">
-          <span className="font-semibold">Top Hazardous Corridors (Active Selection)</span>
-          <span className="text-[10px] font-mono opacity-65">Click corridor to zoom &amp; cross-filter</span>
+          <span className="font-semibold">{copy.corridors}</span>
+          <span className="text-[10px] font-mono opacity-65">{copy.corridorHint}</span>
         </div>
+        {top_segments.length === 0 && <p className="text-[11px] opacity-70">{copy.emptyCorridors}</p>}
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse font-mono tabular-nums text-[11px]">
             <thead>
               <tr className="border-b border-slate-800 text-[10px] uppercase opacity-70">
-                <th className="py-1 pr-2">Corridor</th>
+                <th className="py-1 pr-2">{copy.corridor}</th>
                 <th className="py-1 px-1 text-right">N</th>
                 <th className="py-1 px-1 text-right">N/km</th>
                 <th className="py-1 pl-1 text-right">EPDO</th>
@@ -337,23 +353,27 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
                 return (
                   <tr
                     key={seg.segment_id}
-                    onClick={() => {
-                      onUpdateFilters({
-                        segment_id: isSelected ? null : seg.segment_id,
-                      });
-                      if (!isSelected) onFlyToSegment(seg.segment_id);
-                    }}
-                    className={`border-b border-slate-800/50 cursor-pointer hover:bg-cyan-500/10 ${
+                    className={`border-b border-slate-800/50 hover:bg-cyan-500/10 ${
                       isSelected ? 'bg-cyan-500/20 text-cyan-300' : ''
                     }`}
                   >
                     <td className="py-1.5 pr-2 font-sans truncate max-w-[180px]">
-                      <Navigation className="w-2.5 h-2.5 inline mr-1 text-cyan-400" />
-                      {seg.name}
+                      <button
+                        type="button"
+                        aria-pressed={isSelected}
+                        onClick={() => {
+                          onUpdateFilters({ segment_id: isSelected ? null : seg.segment_id });
+                          if (!isSelected) onFlyToSegment(seg.segment_id);
+                        }}
+                        className="text-start hover:underline focus-visible:outline focus-visible:outline-2"
+                      >
+                        <Navigation className="w-2.5 h-2.5 inline me-1 text-cyan-400" />
+                        <bdi>{seg.name}</bdi>
+                      </button>
                     </td>
-                    <td className="py-1.5 px-1 text-right font-semibold">{seg.count}</td>
-                    <td className="py-1.5 px-1 text-right">{seg.density_per_km}</td>
-                    <td className="py-1.5 pl-1 text-right text-amber-400">{seg.epdo_sum}</td>
+                    <td className="py-1.5 px-1 text-right font-semibold">{n(seg.count)}</td>
+                    <td className="py-1.5 px-1 text-right">{n(seg.density_per_km)}</td>
+                    <td className="py-1.5 pl-1 text-right text-amber-400">{n(seg.epdo_sum)}</td>
                   </tr>
                 );
               })}

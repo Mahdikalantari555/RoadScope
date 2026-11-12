@@ -8,3 +8,5 @@
 - [ ] 1.4 Provide logical RTL styling, bidirectional isolation for formulas/coordinates, themes and unavailable-WebGL, loading, empty and error states.
 - [ ] 1.5 Connect scientific controls only to implemented endpoints; label synthetic data and assumptions in both languages.
 - [ ] 1.6 Automate catalog completeness, RTL/LTR, keyboard, responsive and end-to-end regression tests across all six workspaces.
+
+Progress: a persisted Persian/English selector, RTL/LTR document settings, localized navigation/startup states, coordinated analytics and simulator controls and tests are in place. A notice identifies incomplete translation. Other workspace strings, map controls, accessibility, localized scientific content and full cross-workspace testing remain open.

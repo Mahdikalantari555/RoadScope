@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from ..config import CANONICAL_EPSG
+from .cure_diagnostics import cure_by_aadt
 
 # Colorblind-safe 3x3 Stevens/Brewer Bivariate Palette:
 # First axis = Risk Terctile (1=Low, 2=Med, 3=High), Second axis = Uncertainty Terctile (1=Low, 2=Med, 3=High)
@@ -337,6 +338,10 @@ def compute_exposure_risk_and_eb(
             "w_environmental_cov": round(wn_env, 3),
         },
         "spf_strata_diagnostics": stratum_diagnostics,
+        "cure_diagnostic": cure_by_aadt(
+            eff_aadt, obs_N, spf_mu, spf_alpha,
+            np.array([bool(r["is_imputed"]) or not (r["obs_aadt"] or r["aadt"]) for r in seg_rows]),
+        ),
         "network_summary": {
             "segment_count": M,
             "total_verified_crashes": int(np.sum(obs_N)),

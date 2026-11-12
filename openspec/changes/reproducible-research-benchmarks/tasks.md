@@ -10,3 +10,5 @@
 - [ ] 1.6 Specify gated optional Voronoi/inhomogeneous second-order, joint link–node, ST-GNN, trajectory HMM and privacy-reviewed text baselines; implement only with required datasets and comparison protocols.
 - [ ] 1.7 Verify cited claims/parameters against primary sources and publish negative results, dataset limitations and exact reproduction instructions.
 - [ ] 1.8 Add localized plots and tests for leakage, ties, unequal lengths, no events, fixed seeds, splits and manifest replay.
+
+Progress: the synthetic in-sample NKDE results now expose a length-based PAI/capture curve and exact normalized AU-PAI, with tie and zero-mass tests. Held-out event evaluation, experimental manifests, and the remaining benchmark integrations are not yet implemented.

@@ -9,6 +9,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { uaiApi } from '../api/client';
+import { PaiCurveChart } from './PaiCurveChart';
 import type { MapOverlayMode, PersonaRole } from '../types/uai';
 
 interface SpatialLabWorkspaceProps {
@@ -368,6 +369,9 @@ export const SpatialLabWorkspace: React.FC<SpatialLabWorkspaceProps> = ({
                       </tr>
                     </tbody>
                   </table>
+                  {nkdeResult.ground_truth_eval.nkde.pai_curve && nkdeResult.ground_truth_eval.planar_kde.pai_curve && (
+                    <PaiCurveChart network={nkdeResult.ground_truth_eval.nkde.pai_curve} planar={nkdeResult.ground_truth_eval.planar_kde.pai_curve} />
+                  )}
                 </div>
               )}
 

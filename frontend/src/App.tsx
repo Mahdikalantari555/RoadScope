@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { uaiApi } from './api/client';
+import { useLanguage } from './i18n';
 import { AnalyticsWorkspace } from './components/AnalyticsWorkspace';
 import { CitizenReportWorkspace } from './components/CitizenReportWorkspace';
 import { HeaderBar } from './components/HeaderBar';
@@ -35,6 +36,7 @@ const INITIAL_FILTERS: CmvFilterState = {
 };
 
 export const App: React.FC = () => {
+  const { language, t } = useLanguage();
   const [darkMode, setDarkMode] = useState<boolean>(true);
   const [meta, setMeta] = useState<PlatformMeta | null>(null);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceMode>('analytics');
@@ -162,7 +164,7 @@ export const App: React.FC = () => {
   if (bootError) {
     return (
       <div className="min-h-screen bg-slate-950 text-rose-300 flex items-center justify-center p-8 font-mono text-sm">
-        Platform Initialization Error: {bootError}
+        {t('initializationError')}: <bdi>{bootError}</bdi>
       </div>
     );
   }
@@ -170,7 +172,7 @@ export const App: React.FC = () => {
   if (!meta) {
     return (
       <div className="min-h-screen bg-slate-950 text-cyan-300 flex items-center justify-center p-8 font-mono text-sm">
-        Initializing RoadScope Spatial Engine (EPSG:25832)...
+        {t('initializing')}
       </div>
     );
   }
@@ -194,10 +196,14 @@ export const App: React.FC = () => {
         onToggleTheme={() => setDarkMode((d) => !d)}
       />
 
+      {language === 'fa' && (
+        <div role="status" className="bg-amber-100 text-amber-950 px-3 py-1 text-xs">{t('partialTranslation')}</div>
+      )}
+
       {/* Split Geovisual Analytics Canvas + Scientific Control & Statistical Workspace */}
       <main className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12">
         {/* Left/Center: Persistent Multi-Scale WebGL Cartographic Canvas */}
-        <section className="lg:col-span-7 xl:col-span-7 h-[46vh] lg:h-full border-b lg:border-b-0 lg:border-r border-slate-800 relative">
+        <section dir="ltr" className="lg:col-span-7 xl:col-span-7 h-[46vh] lg:h-full border-b lg:border-b-0 lg:border-r border-slate-800 relative">
           <MapCanvas
             darkMode={darkMode}
             contextGeojson={meta.context_geojson}
