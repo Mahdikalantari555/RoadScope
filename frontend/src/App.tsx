@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { uaiApi } from './api/client';
 import { AnalyticsWorkspace } from './components/AnalyticsWorkspace';
 import { CitizenReportWorkspace } from './components/CitizenReportWorkspace';
@@ -47,6 +47,8 @@ export const App: React.FC = () => {
   const [networkLayers, setNetworkLayers] = useState<NetworkLayersPayload | null>(null);
   const [filters, setFilters] = useState<CmvFilterState>(INITIAL_FILTERS);
   const [cmvData, setCmvData] = useState<CmvStatePayload | null>(null);
+  const [cmvError, setCmvError] = useState<string | null>(null);
+  const cmvRequest = useRef(0);
 
   // Cached analytical results across workspaces
   const [nkdeResult, setNkdeResult] = useState<Record<string, any> | null>(null);
@@ -76,7 +78,6 @@ export const App: React.FC = () => {
   const loadDatasetContext = useCallback(async (dsId?: number) => {
     try {
       const m = await uaiApi.getMeta();
-      setMeta(m);
       const targetId = dsId ?? m.active_dataset.id;
       const [net, eb] = await Promise.all([
         uaiApi.getNetworkLayers(targetId, true),
@@ -88,8 +89,10 @@ export const App: React.FC = () => {
           w_environmental_cov: 0.15,
         }),
       ]);
+      setMeta(m);
       setNetworkLayers(net);
       setRiskData(eb);
+      setBootError(null);
       setNkdeResult(null);
       setTnkdeGeojson(null);
       setGiStarResult(null);
@@ -105,8 +108,15 @@ export const App: React.FC = () => {
 
   const refreshCmv = useCallback(async () => {
     if (!meta?.active_dataset) return;
-    const cmv = await uaiApi.queryCmv(meta.active_dataset.id, filters);
-    setCmvData(cmv);
+    const request = ++cmvRequest.current;
+    setCmvError(null);
+    setCmvData(null);
+    try {
+      const cmv = await uaiApi.queryCmv(meta.active_dataset.id, filters);
+      if (request === cmvRequest.current) setCmvData(cmv);
+    } catch (error) {
+      if (request === cmvRequest.current) setCmvError(error instanceof Error ? error.message : 'Request failed');
+    }
   }, [meta?.active_dataset?.id, filters]);
 
   useEffect(() => {
@@ -163,7 +173,12 @@ export const App: React.FC = () => {
   if (bootError) {
     return (
       <div className="min-h-screen bg-slate-950 text-rose-300 flex items-center justify-center p-8 font-mono text-sm">
-        {t('initializationError')}: <bdi>{bootError}</bdi>
+        <div className="text-center space-y-4" role="alert">
+          <p>{t('initializationError')}: <bdi>{bootError}</bdi></p>
+          <button type="button" onClick={() => { setBootError(null); void loadDatasetContext(); }} className="rounded bg-cyan-600 px-4 py-2 font-sans text-white hover:bg-cyan-500">
+            {t('retry')}
+          </button>
+        </div>
       </div>
     );
   }
@@ -195,12 +210,18 @@ export const App: React.FC = () => {
         onToggleTheme={() => setDarkMode((d) => !d)}
       />
 
+      {cmvError && <div role="alert" className="bg-rose-950 text-rose-100 px-3 py-2 text-xs flex gap-3 items-center">
+        <span>{t('analyticsLoadError')}: <bdi>{cmvError}</bdi></span>
+        <button type="button" className="underline" onClick={() => void refreshCmv()}>{t('retry')}</button>
+      </div>}
+
       {/* Split Geovisual Analytics Canvas + Scientific Control & Statistical Workspace */}
       <main className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12">
         {/* Start: Persistent Multi-Scale WebGL Cartographic Canvas */}
         <section className="lg:col-span-7 xl:col-span-7 h-[46vh] lg:h-full border-b lg:border-b-0 lg:border-e border-slate-800 relative">
           <MapCanvas
             darkMode={darkMode}
+            isSynthetic={meta.active_dataset.is_synthetic}
             contextGeojson={meta.context_geojson}
             networkLayers={networkLayers}
             incidentsGeojson={cmvData?.incidents_geojson ?? null}
