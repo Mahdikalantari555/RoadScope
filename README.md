@@ -42,6 +42,9 @@ docker compose up --build
 ```
 
 ### Local Sandbox Execution & Automated Test Suite
+
+The frontend build requires Node.js 22 (or Node 20.19+); use the lockfile with `npm ci`.
+
 ```bash
 # Run spatial & statistical verification suite
 PYTHONPATH=backend pytest -v backend/tests
