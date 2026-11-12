@@ -17,7 +17,8 @@ from typing import Any, Literal
 
 import numpy as np
 
-from ..crs import extract_lixel_linestring, linestring_25832_to_geojson_dict
+from ..context import dataset_context
+from ..crs import extract_lixel_linestring, linestring_to_geojson_dict
 from .allocations import incident_distribution
 from .map_matching import parse_utc_iso
 from .network_generator import get_lixel_network_topology
@@ -370,6 +371,7 @@ def run_dataset_tnkde(
     if not 15.0 <= spatial_bandwidth_m <= 1500.0 or not 0.25 <= temporal_bandwidth_days <= 180.0:
         raise ValueError("Spatial bandwidth [15, 1500] m and temporal bandwidth [0.25, 180] days required.")
 
+    epsg = dataset_context(conn, dataset_id).canonical_epsg
     topo = get_lixel_network_topology(conn, dataset_id)
     statuses = (
         ("verified_canonical", "corroborated_pending", "unverified_raw_vgi")
@@ -481,7 +483,7 @@ def run_dataset_tnkde(
         lid = int(topo.lixel_ids[idx])
         sid = int(topo.parent_segment_ids[idx])
         seg = topo.segment_meta[sid]
-        sub_geom = extract_lixel_linestring(seg["geom_25832"], float(topo.m_start_m[idx]), float(topo.m_end_m[idx]))
+        sub_geom = extract_lixel_linestring(seg["geom_m"], float(topo.m_start_m[idx]), float(topo.m_end_m[idx]))
         features.append(
             {
                 "type": "Feature",
@@ -496,7 +498,7 @@ def run_dataset_tnkde(
                     "tnkde_mean_km_day": round(float(mean_per_lixel[idx]), 5),
                     "tnkde_slice_0": round(float(mat_km_day[0, idx]), 5),
                 },
-                "geometry": linestring_25832_to_geojson_dict(sub_geom),
+                "geometry": linestring_to_geojson_dict(sub_geom, epsg),
             }
         )
 

@@ -1,17 +1,19 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { uaiApi } from './api/client';
 import { AnalyticsWorkspace } from './components/AnalyticsWorkspace';
+import { ActiveFilters } from './components/ActiveFilters';
 import { CitizenReportWorkspace } from './components/CitizenReportWorkspace';
 import { HeaderBar } from './components/HeaderBar';
 import { MapCanvas } from './components/MapCanvas';
+import { TehranPreview } from './components/TehranPreview';
 import { RiskEbWorkspace } from './components/RiskEbWorkspace';
 import { SimulatorWorkspace } from './components/SimulatorWorkspace';
 import { SpatialLabWorkspace } from './components/SpatialLabWorkspace';
 import { StewardWorkspace } from './components/StewardWorkspace';
 import { useLanguage } from './i18n';
+import { useCmvQuery } from './hooks/useCmvQuery';
 import type {
   CmvFilterState,
-  CmvStatePayload,
   MapInteractionTool,
   MapOverlayMode,
   NetworkLayersPayload,
@@ -36,7 +38,9 @@ const INITIAL_FILTERS: CmvFilterState = {
 };
 
 export const App: React.FC = () => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  const [presentation, setPresentation] = useState(false);
+  const [tehranPreview, setTehranPreview] = useState(false);
   const [darkMode, setDarkMode] = useState<boolean>(true);
   const [meta, setMeta] = useState<PlatformMeta | null>(null);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceMode>('analytics');
@@ -46,9 +50,7 @@ export const App: React.FC = () => {
 
   const [networkLayers, setNetworkLayers] = useState<NetworkLayersPayload | null>(null);
   const [filters, setFilters] = useState<CmvFilterState>(INITIAL_FILTERS);
-  const [cmvData, setCmvData] = useState<CmvStatePayload | null>(null);
-  const [cmvError, setCmvError] = useState<string | null>(null);
-  const cmvRequest = useRef(0);
+  const { data: cmvData, error: cmvError, status: cmvStatus, refresh: refreshCmv } = useCmvQuery(meta?.active_dataset?.id, filters);
 
   // Cached analytical results across workspaces
   const [nkdeResult, setNkdeResult] = useState<Record<string, any> | null>(null);
@@ -68,6 +70,10 @@ export const App: React.FC = () => {
   } | null>(null);
   const [flyToTarget, setFlyToTarget] = useState<{ lon: number; lat: number; zoom?: number; ts: number } | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [datasetSwitching, setDatasetSwitching] = useState(false);
+  const [datasetError, setDatasetError] = useState<string | null>(null);
+  const datasetSwitchInFlight = useRef(false);
+  const contextRequest = useRef(0);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -76,6 +82,7 @@ export const App: React.FC = () => {
   }, [darkMode]);
 
   const loadDatasetContext = useCallback(async (dsId?: number) => {
+    const request = ++contextRequest.current;
     try {
       const m = await uaiApi.getMeta();
       const targetId = dsId ?? m.active_dataset.id;
@@ -87,8 +94,9 @@ export const App: React.FC = () => {
           w_epdo_severity: 0.3,
           w_geometric_hazard: 0.15,
           w_environmental_cov: 0.15,
-        }),
+        }).catch(() => null),
       ]);
+      if (request !== contextRequest.current) return;
       setMeta(m);
       setNetworkLayers(net);
       setRiskData(eb);
@@ -98,30 +106,13 @@ export const App: React.FC = () => {
       setGiStarResult(null);
       setNdbscanResult(null);
     } catch (e) {
-      setBootError(e instanceof Error ? e.message : 'Failed to initialize platform metadata');
+      if (request === contextRequest.current) setBootError(e instanceof Error ? e.message : 'Failed to initialize platform metadata');
     }
   }, []);
 
   useEffect(() => {
     loadDatasetContext();
   }, [loadDatasetContext]);
-
-  const refreshCmv = useCallback(async () => {
-    if (!meta?.active_dataset) return;
-    const request = ++cmvRequest.current;
-    setCmvError(null);
-    setCmvData(null);
-    try {
-      const cmv = await uaiApi.queryCmv(meta.active_dataset.id, filters);
-      if (request === cmvRequest.current) setCmvData(cmv);
-    } catch (error) {
-      if (request === cmvRequest.current) setCmvError(error instanceof Error ? error.message : 'Request failed');
-    }
-  }, [meta?.active_dataset?.id, filters]);
-
-  useEffect(() => {
-    refreshCmv();
-  }, [refreshCmv]);
 
   const handleSelectWorkspace = (mode: WorkspaceMode) => {
     setActiveWorkspace(mode);
@@ -152,9 +143,20 @@ export const App: React.FC = () => {
   };
 
   const handleSwitchDataset = async (datasetId: number) => {
-    await uaiApi.activateDataset(datasetId);
-    setFilters(INITIAL_FILTERS);
-    await loadDatasetContext(datasetId);
+    if (datasetSwitchInFlight.current) return;
+    datasetSwitchInFlight.current = true;
+    setDatasetSwitching(true);
+    setDatasetError(null);
+    try {
+      await uaiApi.activateDataset(datasetId);
+      setFilters(INITIAL_FILTERS);
+      await loadDatasetContext(datasetId);
+    } catch (error) {
+      setDatasetError(error instanceof Error ? error.message : 'Dataset switch failed');
+    } finally {
+      datasetSwitchInFlight.current = false;
+      setDatasetSwitching(false);
+    }
   };
 
   const handleFlyToSegment = (segmentId: number) => {
@@ -169,6 +171,8 @@ export const App: React.FC = () => {
       }
     }
   };
+
+  if (tehranPreview) return <TehranPreview onClose={() => setTehranPreview(false)} />;
 
   if (bootError) {
     return (
@@ -203,6 +207,7 @@ export const App: React.FC = () => {
         activeDataset={meta.active_dataset}
         datasets={meta.datasets}
         onSwitchDataset={handleSwitchDataset}
+        datasetSwitching={datasetSwitching}
         activeRole={activeRole}
         personas={meta.personas}
         onSwitchRole={setActiveRole}
@@ -210,6 +215,17 @@ export const App: React.FC = () => {
         onToggleTheme={() => setDarkMode((d) => !d)}
       />
 
+      <div className="flex items-center justify-between gap-3 px-3 py-1 border-b border-slate-700 text-xs">
+        <span>{meta.study_area} · <bdi>{meta.active_dataset.name}</bdi> {meta.active_dataset.is_synthetic && <strong className="text-amber-400"> · {language === 'fa' ? 'رخدادهای مصنوعی؛ نه خطر واقعی' : 'Synthetic incidents; not real-world risk'}</strong>}</span>
+        <button type="button" onClick={() => setTehranPreview(true)} className="shrink-0 rounded border border-amber-500/60 px-2 py-1 hover:bg-amber-500/20">{language === 'fa' ? 'نمونهٔ تهران' : 'Tehran sample'}</button>
+        <button type="button" aria-pressed={presentation} onClick={() => setPresentation(v => !v)} className="shrink-0 rounded border border-cyan-500/60 px-2 py-1 hover:bg-cyan-500/20">
+          {presentation ? (language === 'fa' ? 'خروج از نمای ارائه' : 'Exit presentation') : (language === 'fa' ? 'نمای ارائه' : 'Presentation view')}
+        </button>
+      </div>
+      {presentation && <ActiveFilters filters={filters} onUpdate={(patch) => setFilters(prev => ({ ...prev, ...patch }))} onReset={() => setFilters(INITIAL_FILTERS)} />}
+      {datasetError && <div role="alert" className="bg-rose-950 text-rose-100 px-3 py-2 text-xs">
+        {language === 'fa' ? 'تغییر مجموعه‌داده ناموفق بود' : 'Dataset switch failed'}: <bdi>{datasetError}</bdi>
+      </div>}
       {cmvError && <div role="alert" className="bg-rose-950 text-rose-100 px-3 py-2 text-xs flex gap-3 items-center">
         <span>{t('analyticsLoadError')}: <bdi>{cmvError}</bdi></span>
         <button type="button" className="underline" onClick={() => void refreshCmv()}>{t('retry')}</button>
@@ -218,10 +234,11 @@ export const App: React.FC = () => {
       {/* Split Geovisual Analytics Canvas + Scientific Control & Statistical Workspace */}
       <main className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12">
         {/* Start: Persistent Multi-Scale WebGL Cartographic Canvas */}
-        <section className="lg:col-span-7 xl:col-span-7 h-[46vh] lg:h-full border-b lg:border-b-0 lg:border-e border-slate-800 relative">
+        <section className={`${presentation ? 'lg:col-span-12 h-full' : 'lg:col-span-7 xl:col-span-7 h-[46vh] lg:h-full'} border-b lg:border-b-0 lg:border-e border-slate-800 relative`}>
           <MapCanvas
             darkMode={darkMode}
             isSynthetic={meta.active_dataset.is_synthetic}
+            presentation={presentation}
             contextGeojson={meta.context_geojson}
             networkLayers={networkLayers}
             incidentsGeojson={cmvData?.incidents_geojson ?? null}
@@ -248,17 +265,22 @@ export const App: React.FC = () => {
                 setActiveWorkspace('citizen_vgi');
               }
             }}
+            center4326={meta.center_4326}
+            networkBbox4326={meta.network_bbox_4326 ?? null}
+            canonicalEpsg={meta.active_dataset?.crs_epsg ?? Number(meta.canonical_crs.split(':')[1])}
             vgiDraftOverlay={activeWorkspace === 'citizen_vgi' ? vgiDraftOverlay : null}
             flyToTarget={flyToTarget}
           />
         </section>
 
         {/* End: Active Scientific Persona Workspace */}
-        <section className="lg:col-span-5 xl:col-span-5 h-[54vh] lg:h-full min-h-0 overflow-hidden">
+        <section className={`${presentation ? 'hidden' : 'lg:col-span-5 xl:col-span-5 h-[54vh] lg:h-full'} min-h-0 overflow-hidden`}>
           {activeWorkspace === 'analytics' && (
             <AnalyticsWorkspace
               darkMode={darkMode}
               cmvData={cmvData}
+              loading={cmvStatus === 'loading'}
+              networkLayers={networkLayers}
               filters={filters}
               onUpdateFilters={(patch) => setFilters((prev) => ({ ...prev, ...patch }))}
               onResetAllFilters={() => setFilters(INITIAL_FILTERS)}
@@ -302,6 +324,18 @@ export const App: React.FC = () => {
               categories={meta.categories}
               severities={meta.severities}
               clickedMapCoord={clickedMapCoord}
+              suggestedPreset4326={
+                meta.network_bbox_4326
+                  ? [
+                      (meta.network_bbox_4326.min_lon + meta.network_bbox_4326.max_lon) / 2,
+                      (meta.network_bbox_4326.min_lat + meta.network_bbox_4326.max_lat) / 2,
+                    ]
+                  : meta.center_4326
+              }
+              studyAreaLabel={
+                language === 'fa' ? meta.study_area_fa ?? meta.study_area : meta.study_area
+              }
+              ingestionScope={meta.ingestion_scope ?? null}
               onActivatePinTool={() => setActiveTool('vgi_pin')}
               onUpdateVgiDraftOverlay={setVgiDraftOverlay}
               onReportSubmittedOrCorroborated={() => {

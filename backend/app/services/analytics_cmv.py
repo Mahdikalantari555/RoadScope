@@ -9,6 +9,7 @@ from typing import Any
 
 from shapely.geometry import Point, Polygon
 
+from ..context import dataset_context
 from ..crs import metric_circle_geojson_4326, to_metric
 from .map_matching import parse_utc_iso
 
@@ -54,9 +55,9 @@ def get_network_layers_geojson(
                 "elevation_level": int(r["elevation_level"]),
                 "oneway_direction": r["oneway_direction"],
                 "direction_source": r["direction_source"],
-                "aadt": int(r["obs_aadt"] or r["aadt"] or 8000),
-                "aadt_is_imputed": bool(r["is_imputed"]),
-                "coverage_confidence": round(float(r["coverage_confidence"] or 0.8), 3),
+                "aadt": int(r["obs_aadt"] if r["obs_aadt"] is not None else r["aadt"]) if (r["obs_aadt"] is not None or r["aadt"] is not None) else None,
+                "aadt_is_imputed": bool(r["is_imputed"]) if r["is_imputed"] is not None else None,
+                "coverage_confidence": round(float(r["coverage_confidence"]), 3) if r["coverage_confidence"] is not None else None,
             },
             "geometry": json.loads(r["geojson_4326"]),
         }
@@ -159,6 +160,7 @@ def query_synchronized_cmv_state(
     else:
         statuses = ("verified_canonical",)
 
+    epsg = dataset_context(conn, dataset_id).canonical_epsg
     ph = ",".join("?" for _ in statuses)
     params: list[Any] = [dataset_id, *statuses]
     rtree_join = ""
@@ -166,8 +168,8 @@ def query_synchronized_cmv_state(
 
     # Use R*Tree spatial index when bounding box filter is active!
     if bbox_4326 and len(bbox_4326) == 4:
-        min_x, min_y = to_metric(bbox_4326[0], bbox_4326[1])
-        max_x, max_y = to_metric(bbox_4326[2], bbox_4326[3])
+        min_x, min_y = to_metric(bbox_4326[0], bbox_4326[1], epsg)
+        max_x, max_y = to_metric(bbox_4326[2], bbox_4326[3], epsg)
         lo_x, hi_x = min(min_x, max_x), max(min_x, max_x)
         lo_y, hi_y = min(min_y, max_y), max(min_y, max_y)
         rtree_join = "JOIN rtree_accidents_snapped rt ON rt.id = a.id"
@@ -203,13 +205,13 @@ def query_synchronized_cmv_state(
     """
     all_rows = conn.execute(sql, params).fetchall()
 
-    # Optional polygon lasso containment in canonical metric EPSG:25832
-    poly_25832: Polygon | None = None
+    # Optional polygon lasso containment in the dataset's canonical metric CRS
+    poly_metric: Polygon | None = None
     if polygon_4326 and len(polygon_4326) >= 3:
-        metric_ring = [to_metric(pt[0], pt[1]) for pt in polygon_4326]
+        metric_ring = [to_metric(pt[0], pt[1], epsg) for pt in polygon_4326]
         if metric_ring[0] != metric_ring[-1]:
             metric_ring.append(metric_ring[0])
-        poly_25832 = Polygon(metric_ring)
+        poly_metric = Polygon(metric_ring)
 
     # First compute baseline weekly timeline (prior to temporal brush so brush always displays context!)
     baseline_weekly: dict[str, int] = {}
@@ -223,7 +225,7 @@ def query_synchronized_cmv_state(
     for r in all_rows:
         sx = float(r["snapped_x_m"] or r["raw_x_m"])
         sy = float(r["snapped_y_m"] or r["raw_y_m"])
-        if poly_25832 is not None and not poly_25832.contains(Point(sx, sy)):
+        if poly_metric is not None and not poly_metric.contains(Point(sx, sy)):
             continue
         if segment_id is not None and int(r["snapped_segment_id"] or -1) != int(segment_id):
             continue
@@ -400,6 +402,7 @@ def query_synchronized_cmv_state(
                             float(r["raw_x_m"]),
                             float(r["raw_y_m"]),
                             float(r["observational_radius_m"]),
+                            canonical_epsg=epsg,
                         ),
                     }
                 )

@@ -23,6 +23,10 @@ class Identity:
 
 identity: ContextVar[Identity | None] = ContextVar("identity", default=None)
 
+# Demo identity is intentionally powerful, so never allow it to see real incident datasets.
+# Network import and study-area mutations are disabled until isolated profiles are supported.
+
+
 READ_POSTS = {
     "/api/v1/crs/project",
     "/api/v1/vgi/preview-snap-and-conflate",
@@ -46,8 +50,17 @@ def install_security(app) -> None:
         if path.startswith("/api/v1"):
             if demo_enabled():
                 with db_session() as conn:
-                    if conn.execute("SELECT 1 FROM dataset_sources WHERE is_synthetic = 0 LIMIT 1").fetchone():
-                        return JSONResponse({"detail": "Demo mode refuses non-synthetic datasets."}, status_code=503)
+                    real_dataset = conn.execute(
+                        "SELECT 1 FROM dataset_sources WHERE is_synthetic = 0 LIMIT 1"
+                    ).fetchone()
+                if real_dataset:
+                    return JSONResponse(
+                        {"detail": "Demo mode refuses non-synthetic datasets."}, status_code=503
+                    )
+                if request.method not in {"GET", "HEAD", "OPTIONS"} and (
+                    path.startswith("/api/v1/ingest/") or path.startswith("/api/v1/study-areas")
+                ):
+                    return JSONResponse({"detail": "Network administration is disabled in demo mode."}, status_code=403)
                 principal = Identity(None, "data_steward")
             else:
                 bearer = request.headers.get("authorization", "").removeprefix("Bearer ")
@@ -66,13 +79,29 @@ def install_security(app) -> None:
                             if user:
                                 principal = Identity(int(user["id"]), str(user["role"]))
                             break
+                # Until real-data disclosure policy and per-route authorization are approved,
+                # isolate the entire instance as soon as any real incident dataset exists.
+                # This deliberately includes GETs, exports and read-only POSTs; query parameters
+                # cannot be trusted to identify every dataset touched by an endpoint.
+                if request.method != "OPTIONS":
+                    with db_session() as conn:
+                        real_dataset = conn.execute(
+                            "SELECT 1 FROM dataset_sources WHERE is_synthetic = 0 LIMIT 1"
+                        ).fetchone()
+                    if real_dataset:
+                        if principal is None:
+                            return JSONResponse({"detail": "Authentication required."}, status_code=401)
+                        if principal.role != "data_steward":
+                            return JSONResponse({"detail": "Insufficient server-side role."}, status_code=403)
             mutation = request.method not in {"GET", "HEAD", "OPTIONS"} and path not in READ_POSTS
             if mutation:
                 if principal is None:
                     return JSONResponse({"detail": "Authentication required."}, status_code=401)
                 role = principal.role
                 allowed = True
-                if "/steward/" in path:
+                if path.startswith(("/api/v1/ingest/", "/api/v1/study-areas")):
+                    allowed = role == "data_steward"
+                elif "/steward/" in path:
                     allowed = role == "data_steward"
                 elif "/simulator/" in path or "/datasets/" in path:
                     allowed = role in {"simulation_scientist", "data_steward"}

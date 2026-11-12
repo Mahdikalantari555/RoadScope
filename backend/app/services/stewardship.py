@@ -11,13 +11,7 @@ import networkx as nx
 import numpy as np
 from shapely.wkt import loads as wkt_loads
 
-from ..config import (
-    CANONICAL_EPSG,
-    STUDY_MAX_X_M,
-    STUDY_MAX_Y_M,
-    STUDY_MIN_X_M,
-    STUDY_MIN_Y_M,
-)
+from ..context import checked_ingest_point, dataset_context
 from ..crs import interpolate_lrs_point, to_metric, to_wgs84
 from ..db import log_audit_event, utc_now_iso
 from .map_matching import (
@@ -32,12 +26,23 @@ from .network_generator import (
 )
 
 
-def validate_metric_bounds(x_m: float, y_m: float) -> None:
-    if not (STUDY_MIN_X_M <= x_m <= STUDY_MAX_X_M and STUDY_MIN_Y_M <= y_m <= STUDY_MAX_Y_M):
-        raise ValueError(
-            f"Coordinates (E={x_m:.1f}m, N={y_m:.1f}m) fall outside the Frankfurt EPSG:25832 study domain "
-            f"[{STUDY_MIN_X_M:.0f}..{STUDY_MAX_X_M:.0f}, {STUDY_MIN_Y_M:.0f}..{STUDY_MAX_Y_M:.0f}]."
-        )
+def validate_metric_bounds(x_m: float, y_m: float, canonical_epsg: int | None = None) -> None:
+    """Validate that a metric coordinate is finite and inside the CRS's valid area.
+
+    There is deliberately no city-level rejection: ingestion is accepted anywhere on Earth as
+    long as the point is representable in the dataset's metric CRS. Study-area boundaries only
+    annotate provenance (``outside_study_area``) and never block a report.
+    """
+    import math
+
+    if not (math.isfinite(float(x_m)) and math.isfinite(float(y_m))):
+        raise ValueError("Metric coordinates must be finite numbers.")
+    if canonical_epsg:
+        from ..crs import safe_to_metric, to_wgs84
+
+        lon, lat = to_wgs84(float(x_m), float(y_m), canonical_epsg)
+        if safe_to_metric(lon, lat, canonical_epsg) is None:
+            raise ValueError(f"Coordinates (E={x_m:.1f}m, N={y_m:.1f}m) are outside EPSG:{canonical_epsg}.")
 
 
 def submit_citizen_vgi_report(
@@ -64,22 +69,33 @@ def submit_citizen_vgi_report(
     attachment_filenames: list[str] | None = None,
     selected_segment_id: int | None = None,
     actor_role: str = "citizen_reporter",
+    allow_outside_study_area: bool = True,
+    reported_from_country_code: str = "",
+    geocode_source: str = "map_click",
 ) -> dict[str, Any]:
     """
     Submit a validated Citizen VGI Incident Report (US-2.1 & US-2.2):
     Preserves raw clicked geometry, computes probabilistic topological snap candidates,
     strips EXIF metadata on attachments, and assigns 'unverified_raw_vgi' status.
     """
+    ctx = dataset_context(conn, dataset_id)
+    epsg = ctx.canonical_epsg
+
     if x_m is not None and y_m is not None:
         rx_m, ry_m = round(float(x_m), 3), round(float(y_m), 3)
-        rlon, rlat = to_wgs84(rx_m, ry_m)
+        validate_metric_bounds(rx_m, ry_m, epsg)
+        rlon, rlat = to_wgs84(rx_m, ry_m, epsg)
     elif lon is not None and lat is not None:
-        rlon, rlat = round(float(lon), 7), round(float(lat), 7)
-        rx_m, ry_m = to_metric(rlon, rlat)
+        point = checked_ingest_point(
+            ctx, lon, lat, allow_outside_boundary=allow_outside_study_area
+        )
+        rlon, rlat, rx_m, ry_m = point["lon"], point["lat"], point["x_m"], point["y_m"]
     else:
         raise ValueError("Either geographic (lon, lat) or projected metric (x_m, y_m) coordinates are required.")
 
-    validate_metric_bounds(rx_m, ry_m)
+    outside_area = bool(lon is not None and lat is not None and checked_ingest_point(
+        ctx, rlon, rlat, allow_outside_boundary=True
+    )["outside_study_area"]) if bool(ctx.boundary) else False
 
     if not (2.0 <= observational_radius_m <= 250.0):
         raise ValueError("Observational confidence radius must be between 2m and 250m.")
@@ -148,13 +164,13 @@ def submit_citizen_vgi_report(
         (dataset_id, source_type, verification_status, reporter_user_id, category_id, severity_id,
          occurred_at_utc, reported_at_utc, reporting_lag_min, involved_vehicles, involved_pedestrians,
          involved_cyclists, emergency_response_present, narrative, observational_radius_m, srid,
-         raw_x_m, raw_y_m, raw_lon, raw_lat, raw_wkt_25832,
-         snapped_x_m, snapped_y_m, snapped_lon, snapped_lat, snapped_wkt_25832,
+         raw_x_m, raw_y_m, raw_lon, raw_lat,
+         snapped_x_m, snapped_y_m, snapped_lon, snapped_lat,
          snapped_segment_id, snapped_lixel_id, linear_offset_m, orthogonal_snap_dist_m,
          snap_probability, snap_candidates_json, vgi_credibility_score, witness_count,
-         is_false_alarm_gt, created_at_utc)
+         is_false_alarm_gt, created_at_utc, geocode_source, reported_from_country_code)
         VALUES (?, 'citizen_vgi', 'unverified_raw_vgi', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)
         """,
         (
             dataset_id,
@@ -170,17 +186,15 @@ def submit_citizen_vgi_report(
             1 if emergency_response_present else 0,
             clean_narrative or f"Citizen VGI report ({category_code}) near {chosen['segment_name']}.",
             float(observational_radius_m),
-            CANONICAL_EPSG,
+            epsg,
             rx_m,
             ry_m,
             rlon,
             rlat,
-            f"POINT ({rx_m:.3f} {ry_m:.3f})",
             chosen["snapped_x_m"],
             chosen["snapped_y_m"],
             chosen["snapped_lon"],
             chosen["snapped_lat"],
-            f"POINT ({chosen['snapped_x_m']:.3f} {chosen['snapped_y_m']:.3f})",
             chosen["segment_id"],
             chosen["lixel_id"],
             chosen["linear_offset_m"],
@@ -189,6 +203,8 @@ def submit_citizen_vgi_report(
             json.dumps(cands),
             cred,
             now,
+            geocode_source,
+            reported_from_country_code,
         ),
     )
     acc_id = int(cur.lastrowid)
@@ -247,7 +263,14 @@ def submit_citizen_vgi_report(
     return {
         "accident_id": acc_id,
         "verification_status": "unverified_raw_vgi",
-        "raw_coords": {"x_m": rx_m, "y_m": ry_m, "lon": rlon, "lat": rlat, "srid": CANONICAL_EPSG},
+        "raw_coords": {"x_m": rx_m, "y_m": ry_m, "lon": rlon, "lat": rlat, "srid": epsg},
+        "study_area_key": ctx.study_area_key,
+        "outside_study_area": outside_area,
+        "study_area_note": (
+            "Recorded outside the study-area boundary; kept with an out-of-area flag rather than rejected."
+            if outside_area
+            else ""
+        ),
         "chosen_snap": chosen,
         "candidate_snaps": cands,
         "vgi_credibility_score": cred,
@@ -617,12 +640,12 @@ def steward_review_incident(
 
     if override_segment_id is not None:
         seg_row = conn.execute(
-            "SELECT id, length_m, wkt_25832 FROM road_segments WHERE id = ? AND dataset_id = ?",
+            "SELECT id, length_m, wkt_m FROM road_segments WHERE id = ? AND dataset_id = ?",
             (override_segment_id, int(acc["dataset_id"])),
         ).fetchone()
         if not seg_row:
             raise ValueError(f"Override road segment #{override_segment_id} not found in active dataset.")
-        line = wkt_loads(seg_row["wkt_25832"])
+        line = wkt_loads(seg_row["wkt_m"])
         seg_id = int(seg_row["id"])
         if override_offset_m is not None:
             m_off = max(0.0, min(float(override_offset_m), float(seg_row["length_m"])))
@@ -631,7 +654,7 @@ def steward_review_incident(
 
             m_off = float(line.project(Point(float(acc["raw_x_m"]), float(acc["raw_y_m"]))))
         sx_m, sy_m = interpolate_lrs_point(line, m_off)
-        slon, slat = to_wgs84(sx_m, sy_m)
+        slon, slat = to_wgs84(sx_m, sy_m, dataset_context(conn, int(acc["dataset_id"])).canonical_epsg)
         lix_id = _find_lixel_for_offset(conn, seg_id, m_off)
         d_ortho = round(math.hypot(sx_m - float(acc["raw_x_m"]), sy_m - float(acc["raw_y_m"])), 3)
 
@@ -653,7 +676,7 @@ def steward_review_incident(
         SET verification_status = ?, severity_id = ?,
             snapped_segment_id = ?, snapped_lixel_id = ?, linear_offset_m = ?,
             snapped_x_m = ?, snapped_y_m = ?, snapped_lon = ?, snapped_lat = ?,
-            snapped_wkt_25832 = ?, orthogonal_snap_dist_m = ?, vgi_credibility_score = ?
+            orthogonal_snap_dist_m = ?, vgi_credibility_score = ?
         WHERE id = ?
         """,
         (
@@ -666,7 +689,6 @@ def steward_review_incident(
             sy_m,
             slon,
             slat,
-            f"POINT ({sx_m:.3f} {sy_m:.3f})",
             d_ortho,
             round(new_cred, 4),
             accident_id,

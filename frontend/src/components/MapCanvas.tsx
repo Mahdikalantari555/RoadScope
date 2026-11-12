@@ -17,7 +17,7 @@ import type {
   NetworkLayersPayload,
   SnapCandidate,
 } from '../types/uai';
-import { BIVARIATE_3X3, wgs84ToUtm32N } from '../utils/colors';
+import { BIVARIATE_3X3, wgs84ToMetric } from '../utils/colors';
 import { escapeHtml, safeHexColor } from '../utils/html';
 import { useLanguage } from '../i18n';
 import { getMapChartsText } from '../workspaceI18n';
@@ -33,6 +33,7 @@ interface VgiDraftMapOverlay {
 interface MapCanvasProps {
   darkMode: boolean;
   isSynthetic: boolean;
+  presentation?: boolean;
   contextGeojson: GeoJSON.FeatureCollection;
   networkLayers: NetworkLayersPayload | null;
   incidentsGeojson: GeoJSON.FeatureCollection | null;
@@ -56,6 +57,10 @@ interface MapCanvasProps {
   onMapVgiClick: (lon: number, lat: number) => void;
   vgiDraftOverlay: VgiDraftMapOverlay | null;
   flyToTarget: { lon: number; lat: number; zoom?: number; ts: number } | null;
+  /** Map framing comes from the API so no city is hard-coded in the client. */
+  center4326?: [number, number] | null;
+  networkBbox4326?: { min_lon: number; min_lat: number; max_lon: number; max_lat: number } | null;
+  canonicalEpsg?: number;
 }
 
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
@@ -82,6 +87,7 @@ const OVERLAY_LABELS: { value: MapOverlayMode; label: string; group: string }[] 
 export const MapCanvas: React.FC<MapCanvasProps> = ({
   darkMode,
   isSynthetic,
+  presentation = false,
   contextGeojson,
   networkLayers,
   incidentsGeojson,
@@ -105,6 +111,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   onMapVgiClick,
   vgiDraftOverlay,
   flyToTarget,
+  center4326,
+  networkBbox4326,
+  canonicalEpsg,
 }) => {
   const { language, t } = useLanguage();
   const mapCopy = getMapChartsText(language);
@@ -119,19 +128,46 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const [showGraticule, setShowGraticule] = useState(true);
   const [showNodes, setShowNodes] = useState(false);
   const [showVgiVectors, setShowVgiVectors] = useState(true);
+  const epsg = canonicalEpsg ?? 3857;
+  const epsgRef = useRef(epsg);
+  epsgRef.current = epsg;
+  const initialCenter: [number, number] = center4326 ?? [51.389, 35.6892];
+  const initialMetric = wgs84ToMetric(initialCenter[0], initialCenter[1], epsg);
   const [cursorCoord, setCursorCoord] = useState<{
     lon: number;
     lat: number;
-    x_m: number;
-    y_m: number;
+    x_m: number | null;
+    y_m: number | null;
     zoom: number;
   }>({
-    lon: 8.6821,
-    lat: 50.1109,
-    x_m: 477274.2,
-    y_m: 5551042.1,
-    zoom: 13.7,
+    lon: initialCenter[0],
+    lat: initialCenter[1],
+    x_m: initialMetric.x_m,
+    y_m: initialMetric.y_m,
+    zoom: 12.6,
   });
+
+  useEffect(() => {
+    setCursorCoord(current => ({ ...current, ...wgs84ToMetric(current.lon, current.lat, epsg) }));
+  }, [epsg]);
+
+  /** Fit the camera to the active dataset's network extent (falls back to the study centre). */
+  const fitToNetwork = (animate: boolean) => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (networkBbox4326) {
+      const { min_lon, min_lat, max_lon, max_lat } = networkBbox4326;
+      map.fitBounds(
+        [
+          [min_lon, min_lat],
+          [max_lon, max_lat],
+        ],
+        { padding: 40, duration: animate ? 700 : 0, maxZoom: 16 }
+      );
+      return;
+    }
+    map.jumpTo({ center: initialCenter, zoom: 12.6, bearing: 0, pitch: 0 });
+  };
 
   // Box-select & polygon-select interactive state
   const [dragBoxPx, setDragBoxPx] = useState<{
@@ -180,18 +216,18 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             { id: 'osm-basemap-layer', type: 'raster', source: 'osm-basemap' },
           ],
         },
-        center: [8.6885, 50.1155],
-        zoom: 13.65,
-        minZoom: 11.5,
-        maxZoom: 18.5,
-        attributionControl: { compact: true },
+        center: initialCenter,
+        zoom: 12.6,
+        minZoom: 3,
+        maxZoom: 19,
+        attributionControl: { compact: false },
       });
 
       map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
       map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-right');
 
       map.on('mousemove', (e) => {
-        const { x_m, y_m } = wgs84ToUtm32N(e.lngLat.lng, e.lngLat.lat);
+        const { x_m, y_m } = wgs84ToMetric(e.lngLat.lng, e.lngLat.lat, epsgRef.current);
         setCursorCoord({
           lon: Number(e.lngLat.lng.toFixed(5)),
           lat: Number(e.lngLat.lat.toFixed(5)),
@@ -760,6 +796,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => mapRef.current?.resize());
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   // Theme updates
   useEffect(() => {
     const map = mapRef.current;
@@ -1107,8 +1151,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   };
 
   const resetCamera = () => {
-    mapRef.current?.flyTo({ center: [8.6885, 50.1155], zoom: 13.65, bearing: 0, pitch: 0 });
+    fitToNetwork(true);
   };
+
+  // Recentre when the active dataset changes (different city / study area).
+  useEffect(() => {
+    if (!mapLoaded) return;
+    fitToNetwork(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapLoaded, center4326?.[0], center4326?.[1], networkBbox4326?.min_lon, networkBbox4326?.max_lat]);
 
   return (
     <div className="relative w-full h-full overflow-hidden select-none">
@@ -1150,7 +1201,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
       {/* Top-Start: Multi-Scale Cartographic Layer Switcher & Spatial Selection Toolbar */}
       <div
-        className={`absolute top-3 start-3 z-10 flex flex-col gap-2 max-w-[330px] ${
+        className={`${presentation ? 'hidden' : 'flex'} absolute top-3 start-3 z-10 flex-col gap-2 max-w-[330px] ${
           darkMode ? 'text-slate-100' : 'text-slate-900'
         }`}
       >
@@ -1560,8 +1611,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         <div className="flex items-center gap-3 truncate">
           <span className="flex items-center gap-1 text-cyan-400">
             <Crosshair className="w-3 h-3" />
-            EPSG:25832 E {cursorCoord.x_m.toLocaleString('en-US', { minimumFractionDigits: 1 })}m · N{' '}
-            {cursorCoord.y_m.toLocaleString('en-US', { minimumFractionDigits: 1 })}m
+            <bdi dir="ltr">
+              EPSG:{epsg} E {cursorCoord.x_m?.toLocaleString('en-US', { minimumFractionDigits: 1 }) ?? '—'}m · N{' '}
+              {cursorCoord.y_m?.toLocaleString('en-US', { minimumFractionDigits: 1 }) ?? '—'}m
+            </bdi>
           </span>
           <span className="hidden sm:inline">
             | WGS84 {cursorCoord.lon.toFixed(5)}°E, {cursorCoord.lat.toFixed(5)}°N

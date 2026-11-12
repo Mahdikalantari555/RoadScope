@@ -55,13 +55,15 @@ def init_schema_and_reference_data(db_path: Path | None = None) -> None:
         now = utc_now_iso()
 
         # Seed the persona users
+        # Location-neutral demo personas: they are not tied to any city so the platform can be
+        # instantiated for any study area without rewriting seed data.
         users = [
-            ("dr_weber_sim", "Dr. Lukas Weber", "simulation_scientist", 0.98),
-            ("citizen_maya", "Maya Lindner (VGI Contributor)", "citizen_reporter", 0.72),
-            ("citizen_tariq", "Tariq Al-Mansoor (VGI Contributor)", "citizen_reporter", 0.81),
-            ("steward_krause", "Ing. Hannah Krause (Lead Steward)", "data_steward", 0.99),
+            ("dr_sim", "Dr. Samira Rahmani (Simulation Lab)", "simulation_scientist", 0.98),
+            ("citizen_maya", "Maya (VGI Contributor)", "citizen_reporter", 0.72),
+            ("citizen_tariq", "Tariq (VGI Contributor)", "citizen_reporter", 0.81),
+            ("steward_lead", "Ing. Hannah Krause (Lead Steward)", "data_steward", 0.99),
             ("prof_okabe_gis", "Prof. Elena Rostova (GIScience Lab)", "gis_researcher", 0.99),
-            ("eng_bauer_safety", "Dipl.-Ing. Felix Bauer (Traffic Safety)", "safety_engineer", 0.97),
+            ("eng_safety", "Dipl.-Ing. Felix Bauer (Traffic Safety)", "safety_engineer", 0.97),
             ("analyst_chen", "Dr. Mei-Ling Chen (Urban Mobility)", "mobility_analyst", 0.96),
         ]
         for uname, fname, role, trust in users:

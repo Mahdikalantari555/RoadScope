@@ -10,7 +10,7 @@ from test_migrations import legacy_database
 def insert_lixel(conn, lid, sid, index, start, end):
     conn.execute(
         """INSERT INTO road_lixels(id,dataset_id,parent_segment_id,lixel_index,m_start_m,m_end_m,length_m,midpoint_m,
-        mid_x_m,mid_y_m,mid_lon,mid_lat,min_x,max_x,min_y,max_y,wkt_25832,geojson_4326)
+        mid_x_m,mid_y_m,mid_lon,mid_lat,min_x,max_x,min_y,max_y,wkt_m,geojson_4326)
         VALUES (?,1,?,?,?,?,?,?,0,0,0,0,0,1,0,1,'LINESTRING (0 0, 1 1)','{}')""",
         (lid, sid, index, start, end, end - start, (start + end) / 2),
     )
@@ -57,12 +57,12 @@ def test_geometric_crossing_without_shared_node_is_disconnected(tmp_path):
     apply_migrations(conn, MIGRATIONS_DIR)
     for node in (5, 6):
         conn.execute(
-            "INSERT INTO road_nodes(id,dataset_id,node_code,node_type,degree,x_m,y_m,lon,lat,wkt_25832) VALUES (?,1,?,'junction',1,0,0,0,0,'POINT (0 0)')",
+            "INSERT INTO road_nodes(id,dataset_id,node_code,node_type,degree,x_m,y_m,lon,lat,wkt_m) VALUES (?,1,?,'junction',1,0,0,0,0,'POINT (0 0)')",
             (node, str(node)),
         )
     conn.execute(
         """INSERT INTO road_segments(id,dataset_id,edge_code,name,u_node_id,v_node_id,road_class,
-        speed_limit_kmh,lanes,length_m,min_x,max_x,min_y,max_y,wkt_25832,geojson_4326)
+        speed_limit_kmh,lanes,length_m,min_x,max_x,min_y,max_y,wkt_m,geojson_4326)
         VALUES (4,1,'4','overpass',5,6,'local_street',30,1,100,0,1,0,1,'LINESTRING (0 0, 1 1)','{}')"""
     )
     for lid, sid in ((11, 1), (21, 2), (31, 3), (41, 4)):

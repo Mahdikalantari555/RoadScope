@@ -11,7 +11,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("ROADSCOPE_DEMO_MODE", "false")
     monkeypatch.setenv(
         "ROADSCOPE_API_TOKENS",
-        json.dumps({"test-citizen-secret": "citizen_maya", "test-steward-secret": "steward_krause"}),
+        json.dumps({"test-citizen-secret": "citizen_maya", "test-steward-secret": "steward_lead"}),
     )
     import app.config
     import app.db
@@ -116,13 +116,26 @@ def test_allocation_invalidation(client):
         assert second["allocations"][0]["lixel_id"] == lids[1]
 
 
-def test_demo_refuses_real_data(client, monkeypatch):
+def test_demo_refuses_real_data_and_import(client, monkeypatch):
     monkeypatch.setenv("ROADSCOPE_DEMO_MODE", "true")
     from app.db import db_session
 
+    assert client.post("/api/v1/ingest/network", json={}).status_code == 403
+    assert client.post("/api/v1/study-areas/tehran/datasets", json={}).status_code == 403
     with db_session() as conn:
         conn.execute("UPDATE dataset_sources SET is_synthetic=0")
-    assert client.get("/api/v1/meta").status_code == 503
+    for method, path in (("get", "/api/v1/meta"), ("post", "/api/v1/vgi/submit"),
+                         ("post", "/api/v1/simulator/generate")):
+        response = getattr(client, method)(path)
+        assert response.status_code == 503
+        assert "non-synthetic" in response.text
+
+
+def test_network_administration_requires_steward(client):
+    body = {"key": "test", "name_en": "Test", "center_4326": [0, 0]}
+    assert client.post("/api/v1/study-areas", json=body).status_code == 401
+    assert client.post("/api/v1/study-areas", json=body,
+                       headers={"Authorization": "Bearer test-citizen-secret"}).status_code == 403
 
 
 def test_topology_restriction_refresh_and_trusted_audit(client):
@@ -149,7 +162,7 @@ def test_topology_restriction_refresh_and_trusted_audit(client):
     )
     assert response.status_code == 200, response.text
     with db_session() as conn:
-        user = conn.execute("SELECT id FROM users WHERE username='steward_krause'").fetchone()[0]
+        user = conn.execute("SELECT id FROM users WHERE username='steward_lead'").fetchone()[0]
         audit = conn.execute("SELECT actor_user_id,actor_role FROM audit_logs ORDER BY id DESC LIMIT 1").fetchone()
         assert audit["actor_user_id"] == user
         assert audit["actor_role"] == "data_steward"
@@ -166,3 +179,21 @@ def test_built_spa_and_api_fallback(client):
     assert client.get("/api/v1/does-not-exist").status_code == 404
     asset = next((FRONTEND_DIST_DIR / "assets").glob("*.js"))
     assert client.get("/assets/" + asset.name).status_code == 200
+
+
+def test_real_data_makes_all_api_reads_and_exports_steward_only(client):
+    from app.db import db_session
+    with db_session() as conn:
+        conn.execute("UPDATE dataset_sources SET is_synthetic=0")
+    paths = ("/api/v1/meta", "/api/v1/network/layers", "/api/v1/steward/workspace",
+             "/api/v1/lab/jobs", "/api/v1/lab/jobs/1/export", "/api/v1/research/capabilities")
+    for path in paths:
+        anonymous = client.get(path)
+        citizen = client.get(path, headers={"Authorization": "Bearer test-citizen-secret"})
+        assert anonymous.status_code == 401, path
+        assert citizen.status_code == 403, path
+        assert "raw_lon" not in anonymous.text and "raw_lon" not in citizen.text
+    assert client.post('/api/v1/analytics/cmv', json={}).status_code == 401
+    assert client.post('/api/v1/analytics/cmv', json={},
+        headers={"Authorization": "Bearer test-citizen-secret"}).status_code == 403
+    assert client.get('/api/v1/meta', headers={"Authorization": "Bearer test-steward-secret"}).status_code == 200

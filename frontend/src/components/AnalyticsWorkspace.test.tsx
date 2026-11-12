@@ -103,6 +103,52 @@ describe('AnalyticsWorkspace', () => {
     expect(onFlyToSegment).toHaveBeenCalledWith(7);
   });
 
+  it('keeps filters available while loading or after a request error', () => {
+    const props = { darkMode: true, cmvData: null, filters: { ...baseFilters, severity_codes: ['FATAL'] },
+      onUpdateFilters: vi.fn(), onResetAllFilters: vi.fn(), onFlyToSegment: vi.fn() };
+    const { rerender } = render(<LanguageProvider><AnalyticsWorkspace {...props} loading /></LanguageProvider>);
+    expect(screen.getByRole('status')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Remove filter: Severity/i })).toBeTruthy();
+    rerender(<LanguageProvider><AnalyticsWorkspace {...props} loading={false} /></LanguageProvider>);
+    expect(screen.queryByRole('status')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Remove filter: Severity/i }));
+    expect(props.onUpdateFilters).toHaveBeenCalledWith({ severity_codes: [] });
+  });
+
+  it('discards an unfinished week selection when the query changes and allows cancellation', () => {
+    localStorage.setItem('roadscope.language', 'en');
+    const update = vi.fn();
+    const props = { darkMode: true, cmvData: sampleCmv, filters: baseFilters,
+      onUpdateFilters: update, onResetAllFilters: vi.fn(), onFlyToSegment: vi.fn() };
+    const { rerender } = render(<LanguageProvider><AnalyticsWorkspace {...props} /></LanguageProvider>);
+    fireEvent.click(screen.getByRole('button', { name: /Week of 2026-10-12/ }));
+    expect(screen.getByRole('button', { name: /Week of 2026-10-12/ }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel week selection' }));
+    expect(screen.queryByRole('button', { name: 'Cancel week selection' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Week of 2026-10-12/ }));
+
+    // A shorter response must not reuse an out-of-range index from the old query.
+    const nextData = { ...sampleCmv, weekly_series: [sampleCmv.weekly_series[0]] };
+    rerender(<LanguageProvider><AnalyticsWorkspace {...props} cmvData={nextData} /></LanguageProvider>);
+    fireEvent.click(screen.getByRole('button', { name: /Week of 2026-10-05/ }));
+    expect(update).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Week of 2026-10-05/ }));
+    expect(update).toHaveBeenCalledWith({ start_utc: '2026-10-05T00:00:00Z', end_utc: '2026-10-12T00:00:00Z' });
+  });
+
+  it('drops the timeline anchor when another filter changes', () => {
+    localStorage.setItem('roadscope.language', 'en');
+    const update = vi.fn();
+    const props = { darkMode: true, cmvData: sampleCmv, filters: baseFilters,
+      onUpdateFilters: update, onResetAllFilters: vi.fn(), onFlyToSegment: vi.fn() };
+    const { rerender } = render(<LanguageProvider><AnalyticsWorkspace {...props} /></LanguageProvider>);
+    fireEvent.click(screen.getByRole('button', { name: /Week of 2026-10-12/ }));
+    rerender(<LanguageProvider><AnalyticsWorkspace {...props} filters={{...baseFilters, hour_filter: 1}} /></LanguageProvider>);
+    expect(screen.queryByRole('button', { name: 'Cancel week selection' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Week of 2026-10-05/ }));
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('renders localized loading and empty states without layout crash', () => {
     const { rerender } = render(
       <LanguageProvider>

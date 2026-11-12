@@ -23,6 +23,11 @@ interface CitizenReportWorkspaceProps {
   } | null) => void;
   onReportSubmittedOrCorroborated: () => void;
   onFlyTo: (lon: number, lat: number, zoom?: number) => void;
+  /** A busy location inside the active dataset, supplied by /meta (no city constants here). */
+  suggestedPreset4326?: [number, number] | null;
+  /** Bilingual study-area label and the worldwide-ingestion contract, both from /meta. */
+  studyAreaLabel?: string | null;
+  ingestionScope?: string | null;
 }
 
 export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
@@ -36,12 +41,16 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
   onUpdateVgiDraftOverlay,
   onReportSubmittedOrCorroborated,
   onFlyTo,
+  suggestedPreset4326,
+  studyAreaLabel,
+  ingestionScope,
 }) => {
   const { language } = useLanguage();
   const copy = getCitizenVgiText(language);
 
-  const [lon, setLon] = useState<number>(8.68524);
-  const [lat, setLat] = useState<number>(50.11574);
+  // Default report location follows the active dataset extent, so the form is valid in any city.
+  const [lon, setLon] = useState<number>(suggestedPreset4326?.[0] ?? 0);
+  const [lat, setLat] = useState<number>(suggestedPreset4326?.[1] ?? 0);
   const [obsRadiusM, setObsRadiusM] = useState<number>(20);
   const [occurredUtc, setOccurredUtc] = useState<string>('2026-11-08T17:30:00Z');
   const [categoryCode, setCategoryCode] = useState<string>('PEDESTRIAN_CROSSING');
@@ -64,6 +73,13 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
 
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+
+  useEffect(() => {
+    if (suggestedPreset4326) {
+      setLon(Number(suggestedPreset4326[0].toFixed(6)));
+      setLat(Number(suggestedPreset4326[1].toFixed(6)));
+    }
+  }, [suggestedPreset4326?.[0], suggestedPreset4326?.[1]]);
 
   useEffect(() => {
     if (clickedMapCoord) {
@@ -116,18 +132,19 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
     return () => onUpdateVgiDraftOverlay(null);
   }, []);
 
+  /**
+   * Jump to the study area's suggested demo spot: a point chosen from the active dataset's
+   * network extent, so the same control works for Tehran, an imported OSM extract, or any
+   * future study area.
+   */
   const loadOverpassDemoPreset = async () => {
-    const res = await fetch('/api/v1/crs/project', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ x_m: 477604.0, y_m: 5551962.0 }),
-    });
-    const p = await res.json();
-    setLon(p.lon);
-    setLat(p.lat);
+    if (!suggestedPreset4326) return;
+    const [presetLon, presetLat] = suggestedPreset4326;
+    setLon(presetLon);
+    setLat(presetLat);
     setCategoryCode('PEDESTRIAN_CROSSING');
     setObsRadiusM(22);
-    onFlyTo(p.lon, p.lat, 16.2);
+    onFlyTo(presetLon, presetLat, 16.2);
   };
 
   const handleSubmitNew = async (e: React.FormEvent) => {
@@ -277,6 +294,21 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
           ))}
         </div>
       )}
+
+      {/* Region-agnostic ingestion contract: the demo area never gates a report. */}
+      <div className={`${cardCls} space-y-1`}>
+        <div className="flex items-center justify-between gap-2 text-[11px]">
+          <span className="font-semibold">
+            {copy.studyArea}:{' '}
+            <bdi className="text-cyan-300">{studyAreaLabel ?? '—'}</bdi>
+          </span>
+          <bdi dir="ltr" className="font-mono text-[10px] text-emerald-300">
+            {ingestionScope === 'worldwide' ? copy.boundaryOpenBadge : ingestionScope}
+          </bdi>
+        </div>
+        <p className="text-[10px] opacity-70 leading-relaxed">{copy.openIngestion}</p>
+        <p className="text-[10px] opacity-60 leading-relaxed">{copy.demoSpotHint}</p>
+      </div>
 
       {/* Candidate Probabilistic Topological Snaps */}
       <div className={cardCls}>
