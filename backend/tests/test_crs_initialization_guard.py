@@ -4,11 +4,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+FIXTURES = Path(__file__).resolve().parent / 'fixtures'
+
 
 def test_legacy_database_keeps_crs_and_geometry_with_tehran_fallback(tmp_path):
+    # The fixture is a small, committed copy of the legacy EPSG:25832 database: it exercises the
+    # CRS-preservation path without shipping the city's demo database with the app.
     root = Path(__file__).resolve().parents[2]
     db = tmp_path / 'legacy.sqlite'
-    with sqlite3.connect(root / 'data/uai.sqlite') as source, sqlite3.connect(db) as target:
+    with sqlite3.connect(FIXTURES / 'legacy_uai_25832.sqlite') as source, sqlite3.connect(db) as target:
         source.backup(target)
     with sqlite3.connect(db) as conn:
         expected = conn.execute('SELECT id, wkt_25832 FROM road_segments ORDER BY id LIMIT 1').fetchone()
