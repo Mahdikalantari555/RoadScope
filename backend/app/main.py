@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api.research_routes import router as research_router
 from .api.routes import router as api_router
+from .api.tehran_preview import router as tehran_preview_router
 from .config import DEFAULT_SEED, FRONTEND_DIST_DIR
 from .db import db_session, init_schema_and_reference_data
 from .security import install_security
@@ -63,6 +64,7 @@ app.add_middleware(
 install_security(app)
 app.include_router(api_router)
 app.include_router(research_router)
+app.include_router(tehran_preview_router)
 
 
 if FRONTEND_DIST_DIR.exists():

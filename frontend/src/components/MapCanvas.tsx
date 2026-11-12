@@ -33,6 +33,7 @@ interface VgiDraftMapOverlay {
 interface MapCanvasProps {
   darkMode: boolean;
   isSynthetic: boolean;
+  presentation?: boolean;
   contextGeojson: GeoJSON.FeatureCollection;
   networkLayers: NetworkLayersPayload | null;
   incidentsGeojson: GeoJSON.FeatureCollection | null;
@@ -82,6 +83,7 @@ const OVERLAY_LABELS: { value: MapOverlayMode; label: string; group: string }[] 
 export const MapCanvas: React.FC<MapCanvasProps> = ({
   darkMode,
   isSynthetic,
+  presentation = false,
   contextGeojson,
   networkLayers,
   incidentsGeojson,
@@ -184,7 +186,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         zoom: 13.65,
         minZoom: 11.5,
         maxZoom: 18.5,
-        attributionControl: { compact: true },
+        attributionControl: { compact: false },
       });
 
       map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
@@ -760,6 +762,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => mapRef.current?.resize());
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   // Theme updates
   useEffect(() => {
     const map = mapRef.current;
@@ -1150,7 +1160,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
       {/* Top-Start: Multi-Scale Cartographic Layer Switcher & Spatial Selection Toolbar */}
       <div
-        className={`absolute top-3 start-3 z-10 flex flex-col gap-2 max-w-[330px] ${
+        className={`${presentation ? 'hidden' : 'flex'} absolute top-3 start-3 z-10 flex-col gap-2 max-w-[330px] ${
           darkMode ? 'text-slate-100' : 'text-slate-900'
         }`}
       >

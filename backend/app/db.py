@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .config import MIGRATIONS_DIR, SQLITE_DB_PATH
+from .config import CANONICAL_EPSG, MIGRATIONS_DIR, SQLITE_DB_PATH
 from .migrations import apply_migrations
 
 _SPATIALITE_LOADED_ONCE = False
@@ -48,6 +48,16 @@ def db_session(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
 
 
 def init_schema_and_reference_data(db_path: Path | None = None) -> None:
+    # The legacy schema and seed network encode EPSG:25832 in both their
+    # constraints and geometry columns. Changing only the transformer would
+    # silently reinterpret old coordinates (or write incompatible geometry).
+    # Remove this guard only when CRS-aware storage and initialization exist.
+    if CANONICAL_EPSG != 25832:
+        raise RuntimeError(
+            "The current database schema and simulator require EPSG:25832; "
+            "a Tehran EPSG:32639 analytical database is not yet supported. "
+            "Do not change ROADSCOPE_CANONICAL_EPSG to switch cities."
+        )
     schema_sql = (MIGRATIONS_DIR / "002_spatialite_schema.sql").read_text(encoding="utf-8")
     with db_session(db_path) as conn:
         conn.executescript(schema_sql)

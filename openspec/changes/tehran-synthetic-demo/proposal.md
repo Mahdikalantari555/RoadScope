@@ -6,7 +6,7 @@ The current synthetic road network is a fictional Frankfurt study area. The pres
 
 ## What Changes
 
-Provide an isolated central-Tehran presentation profile: an OSM-derived real street network, an online configurable basemap, and synthetic observations generated against that network. Preserve source/version metadata, accurate metric operations and the existing Frankfurt demonstration. Supply an accessible, presentation-friendly view and a reproducible screenshot procedure. This change specifies future work and does not itself import data or produce a screenshot.
+Replace Frankfurt as the default study area throughout the application with a central-Tehran analytical demonstration: an OSM-derived real street network, an online configurable basemap, and synthetic observations generated against that network. Preserve source/version metadata and accurate metric operations. Existing Frankfurt databases must be protected and recoverable, but Frankfurt is not the default user-facing profile. Supply an accessible, presentation-friendly view and a reproducible screenshot procedure.
 
 ## Capabilities
 
@@ -16,7 +16,7 @@ Provide an isolated central-Tehran presentation profile: an OSM-derived real str
 
 ### Modified Capabilities
 
-None. The existing Frankfurt profile and `/api/v1` contracts remain supported.
+None. Legacy data must not be reinterpreted or overwritten; API changes required by the replacement must be documented.
 
 ## Impact
 

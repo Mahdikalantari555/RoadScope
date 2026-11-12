@@ -2,6 +2,18 @@
 
 ## ADDED Requirements
 
+### Requirement: Tehran replaces the default study area
+The application SHALL use the imported central-Tehran network and synthetic observations for its default map, simulator and supported analysis workflows, rather than presenting Frankfurt as the primary dataset. A separate preview alone SHALL NOT satisfy this requirement. Existing Frankfurt databases SHALL NOT be overwritten or reinterpreted.
+
+#### Scenario: Normal startup
+- **WHEN** the Tehran analytical demonstration is configured and started
+- **THEN** the default map, metadata, bounds, coordinates and supported analysis refer to Tehran, and neither Frankfurt context nor simulated Frankfurt results are presented as Tehran
+
+#### Scenario: Replacement not ready
+- **WHEN** the Tehran analytical data or its compatible schema is unavailable
+- **THEN** the application does not silently label Frankfurt data as Tehran and gives a clear indication of the missing capability
+
+
 ### Requirement: Versioned real street network
 The system SHALL import an explicitly bounded central-Tehran OSM street snapshot with source, date, extraction rules, checksum, license, OSM identifiers and geometry provenance, separate from incident provenance. Extracts SHALL remain outside version control except small permitted fixtures.
 
