@@ -79,12 +79,44 @@ export interface ScenarioSpec {
   description: string;
 }
 
+export interface StudyAreaMeta {
+  key: string;
+  name_en: string;
+  name_fa: string;
+  country_code: string;
+  canonical_epsg: number;
+  canonical_crs_name: string;
+  center_4326: [number, number];
+  label_en: string;
+  label_fa: string;
+  boundary_4326: { min_lon: number; min_lat: number; max_lon: number; max_lat: number } | null;
+  bounded: boolean;
+  network_source: string;
+  network_generator: string | null;
+  demo: boolean;
+  dataset_count?: number;
+}
+
+export interface GeoBounds {
+  min_lon: number;
+  min_lat: number;
+  max_lon: number;
+  max_lat: number;
+}
+
 export interface PlatformMeta {
   canonical_crs: string;
   canonical_crs_name: string;
   web_crs: string;
   study_area: string;
+  study_area_fa?: string;
+  study_area_key?: string;
   center_4326: [number, number];
+  network_bbox_4326?: GeoBounds | null;
+  network_bbox_geometry?: GeoJSON.Geometry | null;
+  boundary_enforced?: boolean;
+  ingestion_scope?: string;
+  study_areas?: StudyAreaMeta[];
   active_dataset: DatasetSource;
   datasets: DatasetSource[];
   categories: CategoryMeta[];

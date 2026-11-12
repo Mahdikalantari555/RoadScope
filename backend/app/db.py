@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .config import CANONICAL_EPSG, MIGRATIONS_DIR, SQLITE_DB_PATH
+from .config import MIGRATIONS_DIR, SQLITE_DB_PATH
 from .migrations import apply_migrations
 
 _SPATIALITE_LOADED_ONCE = False
@@ -48,16 +48,6 @@ def db_session(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
 
 
 def init_schema_and_reference_data(db_path: Path | None = None) -> None:
-    # The legacy schema and seed network encode EPSG:25832 in both their
-    # constraints and geometry columns. Changing only the transformer would
-    # silently reinterpret old coordinates (or write incompatible geometry).
-    # Remove this guard only when CRS-aware storage and initialization exist.
-    if CANONICAL_EPSG != 25832:
-        raise RuntimeError(
-            "The current database schema and simulator require EPSG:25832; "
-            "a Tehran EPSG:32639 analytical database is not yet supported. "
-            "Do not change ROADSCOPE_CANONICAL_EPSG to switch cities."
-        )
     schema_sql = (MIGRATIONS_DIR / "002_spatialite_schema.sql").read_text(encoding="utf-8")
     with db_session(db_path) as conn:
         conn.executescript(schema_sql)
@@ -65,13 +55,15 @@ def init_schema_and_reference_data(db_path: Path | None = None) -> None:
         now = utc_now_iso()
 
         # Seed the persona users
+        # Location-neutral demo personas: they are not tied to any city so the platform can be
+        # instantiated for any study area without rewriting seed data.
         users = [
-            ("dr_weber_sim", "Dr. Lukas Weber", "simulation_scientist", 0.98),
-            ("citizen_maya", "Maya Lindner (VGI Contributor)", "citizen_reporter", 0.72),
-            ("citizen_tariq", "Tariq Al-Mansoor (VGI Contributor)", "citizen_reporter", 0.81),
-            ("steward_krause", "Ing. Hannah Krause (Lead Steward)", "data_steward", 0.99),
+            ("dr_sim", "Dr. Samira Rahmani (Simulation Lab)", "simulation_scientist", 0.98),
+            ("citizen_maya", "Maya (VGI Contributor)", "citizen_reporter", 0.72),
+            ("citizen_tariq", "Tariq (VGI Contributor)", "citizen_reporter", 0.81),
+            ("steward_lead", "Ing. Hannah Krause (Lead Steward)", "data_steward", 0.99),
             ("prof_okabe_gis", "Prof. Elena Rostova (GIScience Lab)", "gis_researcher", 0.99),
-            ("eng_bauer_safety", "Dipl.-Ing. Felix Bauer (Traffic Safety)", "safety_engineer", 0.97),
+            ("eng_safety", "Dipl.-Ing. Felix Bauer (Traffic Safety)", "safety_engineer", 0.97),
             ("analyst_chen", "Dr. Mei-Ling Chen (Urban Mobility)", "mobility_analyst", 0.96),
         ]
         for uname, fname, role, trust in users:

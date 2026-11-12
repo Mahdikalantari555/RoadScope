@@ -8,7 +8,7 @@ import { SimulatorWorkspace } from './SimulatorWorkspace';
 
 const sampleDataset: DatasetSource = {
   id: 1,
-  name: 'Frankfurt Synthetic Baseline',
+  name: 'Tehran Synthetic Demo Baseline',
   scenario_key: 'MULTI_COVARIATE_URBAN',
   is_synthetic: true,
   crs_epsg: 25832,

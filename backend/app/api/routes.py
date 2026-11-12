@@ -6,9 +6,11 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Response
 
-from ..config import CANONICAL_EPSG, WEB_EPSG
-from ..crs import metric_circle_geojson_4326, to_metric, to_wgs84
+from ..config import WEB_EPSG
+from ..context import dataset_context
+from ..crs import metric_circle_geojson_4326, safe_to_metric, to_metric, to_wgs84
 from ..db import db_session
+from ..geo_bbox import bbox_geojson, dataset_bbox
 from ..schemas import (
     CitizenReportSubmitRequest,
     CmvQueryRequest,
@@ -18,11 +20,14 @@ from ..schemas import (
     MergeDuplicateClusterRequest,
     NetworkAutocorrelationRequest,
     NetworkDbscanRequest,
+    NetworkImportRequest,
     NkdeRequest,
     RiskEbEvaluationRequest,
     SimulationRequest,
     SnapConflatePreviewRequest,
     StewardReviewRequest,
+    StudyAreaCreateRequest,
+    StudyAreaDatasetRequest,
 )
 from ..services.analytics_cmv import (
     export_job_to_csv,
@@ -35,6 +40,7 @@ from ..services.map_matching import (
     compute_topological_snap_candidates,
     find_spatiotemporal_conflation_candidates,
 )
+from ..services.ingest import create_dataset_for_study_area, import_network_geojson
 from ..services.network_generator import get_study_area_context_geojson
 from ..services.point_process_sim import SCENARIO_METADATA, run_stochastic_network_simulation
 from ..services.risk_eb_engine import compute_exposure_risk_and_eb
@@ -43,6 +49,12 @@ from ..services.spatial_lab import (
     run_network_autocorrelation,
     run_network_dbscan,
     run_nkde_analysis,
+)
+from ..services.study_area_service import (
+    list_payload as list_study_area_payload,
+    platform_location_payload,
+    resolve_study_area,
+    upsert_study_area,
 )
 from ..services.stewardship import (
     corroborate_existing_incident,
@@ -83,10 +95,17 @@ def _resolve_dataset_id(conn: sqlite3.Connection, requested_id: int | None) -> i
 def health_check() -> dict[str, Any]:
     with db_session() as conn:
         ds_cnt = conn.execute("SELECT COUNT(*) AS c FROM dataset_sources").fetchone()["c"]
+        row = conn.execute(
+            "SELECT id FROM dataset_sources WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        ctx = dataset_context(conn, int(row["id"]) if row else None)
     return {
         "status": "ok",
-        "canonical_crs": f"EPSG:{CANONICAL_EPSG}",
+        "canonical_crs": f"EPSG:{ctx.canonical_epsg}",
         "web_crs": f"EPSG:{WEB_EPSG}",
+        "study_area_key": ctx.study_area_key,
+        "boundary_enforced": False,
+        "ingestion_scope": "worldwide",
         "datasets_initialized": int(ds_cnt),
     }
 
@@ -108,12 +127,26 @@ def get_platform_metadata() -> dict[str, Any]:
         severities = [dict(r) for r in conn.execute("SELECT id, code, rank, label, epdo_weight, color_hex FROM severity_levels ORDER BY rank").fetchall()]
         users = [dict(r) for r in conn.execute("SELECT id, username, full_name, role, trust_weight FROM users ORDER BY id").fetchall()]
 
+        active_row = conn.execute(
+            "SELECT id FROM dataset_sources WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        ctx = dataset_context(conn, int(active_row["id"]) if active_row else None)
+        location = platform_location_payload(conn, ctx)
+        study_areas = list_study_area_payload(conn)
+
     return {
-        "canonical_crs": f"EPSG:{CANONICAL_EPSG}",
-        "canonical_crs_name": "ETRS89 / UTM Zone 32N (Metric, meters)",
+        "canonical_crs": f"EPSG:{ctx.canonical_epsg}",
+        "canonical_crs_name": f"{ctx.crs_name} (metric, meters)",
         "web_crs": f"EPSG:{WEB_EPSG}",
-        "study_area": "Frankfurt am Main Urban Network Core",
-        "center_4326": [8.6821, 50.1109],
+        "study_area": location["study_area"],
+        "study_area_fa": location["study_area_fa"],
+        "study_area_key": location["study_area_key"],
+        "center_4326": location["center_4326"],
+        "network_bbox_4326": location["network_bbox_4326"],
+        "network_bbox_geometry": location["network_bbox_geometry"],
+        "boundary_enforced": False,
+        "ingestion_scope": "worldwide",
+        "study_areas": study_areas,
         "active_dataset": active_ds,
         "datasets": datasets,
         "categories": categories,
@@ -122,7 +155,7 @@ def get_platform_metadata() -> dict[str, Any]:
         "scenarios": [
             {"key": k, **v} for k, v in SCENARIO_METADATA.items()
         ],
-        "context_geojson": get_study_area_context_geojson(),
+        "context_geojson": get_study_area_context_geojson(ctx, demo_network=ctx.study_area.network_generator if ctx.study_area else None),
     }
 
 
@@ -139,12 +172,25 @@ def activate_dataset(dataset_id: int) -> dict[str, Any]:
 
 @router.post("/crs/project")
 def project_coordinates(req: CoordinateProjectRequest) -> dict[str, Any]:
+    with db_session() as conn:
+        ctx = dataset_context(conn, req.dataset_id)
     if req.lon is not None and req.lat is not None:
-        x_m, y_m = to_metric(req.lon, req.lat)
-        return {"lon": round(req.lon, 7), "lat": round(req.lat, 7), "x_m": x_m, "y_m": y_m, "srid": CANONICAL_EPSG}
+        metric = safe_to_metric(req.lon, req.lat, ctx.canonical_epsg)
+        if metric is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"({req.lon}, {req.lat}) is not representable in EPSG:{ctx.canonical_epsg}.",
+            )
+        return {
+            "lon": round(req.lon, 7),
+            "lat": round(req.lat, 7),
+            "x_m": metric[0],
+            "y_m": metric[1],
+            "srid": ctx.canonical_epsg,
+        }
     if req.x_m is not None and req.y_m is not None:
-        lon, lat = to_wgs84(req.x_m, req.y_m)
-        return {"lon": lon, "lat": lat, "x_m": round(req.x_m, 3), "y_m": round(req.y_m, 3), "srid": CANONICAL_EPSG}
+        lon, lat = to_wgs84(req.x_m, req.y_m, ctx.canonical_epsg)
+        return {"lon": lon, "lat": lat, "x_m": round(req.x_m, 3), "y_m": round(req.y_m, 3), "srid": ctx.canonical_epsg}
     raise HTTPException(status_code=422, detail="Provide either (lon, lat) or (x_m, y_m).")
 
 
@@ -258,7 +304,7 @@ def preview_vgi_snap_and_conflate(req: SnapConflatePreviewRequest) -> dict[str, 
             else:
                 raise ValueError("Provide either (lon, lat) or (x_m, y_m).")
 
-            validate_metric_bounds(rx_m, ry_m)
+            validate_metric_bounds(rx_m, ry_m, dataset_context(conn, ds_id).canonical_epsg)
 
             cands = compute_topological_snap_candidates(
                 conn,
@@ -280,9 +326,12 @@ def preview_vgi_snap_and_conflate(req: SnapConflatePreviewRequest) -> dict[str, 
                 max_time_diff_min=req.max_time_diff_min,
             )
 
-            circle_geojson = metric_circle_geojson_4326(rx_m, ry_m, req.observational_radius_m)
+            ctx = dataset_context(conn, ds_id)
+            circle_geojson = metric_circle_geojson_4326(
+                rx_m, ry_m, req.observational_radius_m, canonical_epsg=ctx.canonical_epsg
+            )
             return {
-                "raw_point": {"lon": rlon, "lat": rlat, "x_m": rx_m, "y_m": ry_m, "srid": CANONICAL_EPSG},
+                "raw_point": {"lon": rlon, "lat": rlat, "x_m": rx_m, "y_m": ry_m, "srid": ctx.canonical_epsg},
                 "uncertainty_circle_geojson": circle_geojson,
                 "candidate_snaps": cands,
                 "conflation_alerts": conflation_matches,
@@ -296,6 +345,9 @@ def submit_vgi_endpoint(req: CitizenReportSubmitRequest) -> dict[str, Any]:
     try:
         with db_session() as conn:
             ds_id = _resolve_dataset_id(conn, req.dataset_id)
+            row = conn.execute("SELECT is_synthetic FROM dataset_sources WHERE id = ?", (ds_id,)).fetchone()
+            if row is None or not row["is_synthetic"]:
+                raise HTTPException(status_code=403, detail="Real citizen reporting is not enabled.")
             return submit_citizen_vgi_report(
                 conn,
                 dataset_id=ds_id,
@@ -319,6 +371,9 @@ def submit_vgi_endpoint(req: CitizenReportSubmitRequest) -> dict[str, Any]:
                 attachment_filenames=req.attachment_filenames,
                 selected_segment_id=req.selected_segment_id,
                 actor_role=_trusted_role(req.actor_role),
+                allow_outside_study_area=req.allow_outside_study_area,
+                reported_from_country_code=req.reported_from_country_code,
+                geocode_source=req.geocode_source,
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -328,6 +383,12 @@ def submit_vgi_endpoint(req: CitizenReportSubmitRequest) -> dict[str, Any]:
 def corroborate_vgi_endpoint(accident_id: int, req: CorroborateRequest) -> dict[str, Any]:
     try:
         with db_session() as conn:
+            row = conn.execute(
+                "SELECT d.is_synthetic FROM accidents a JOIN dataset_sources d ON d.id=a.dataset_id WHERE a.id=?",
+                (accident_id,),
+            ).fetchone()
+            if row is not None and not row["is_synthetic"]:
+                raise HTTPException(status_code=403, detail="Real citizen reporting is not enabled.")
             return corroborate_existing_incident(
                 conn,
                 target_accident_id=accident_id,
@@ -613,3 +674,166 @@ def synchronized_cmv_endpoint(req: CmvQueryRequest) -> dict[str, Any]:
             bbox_4326=req.bbox_4326,
             polygon_4326=req.polygon_4326,
         )
+
+
+# --------------------------------------------------------------------------------------------------
+# Study areas and region-agnostic ingestion
+# --------------------------------------------------------------------------------------------------
+
+
+@router.get("/study-areas")
+def get_study_areas() -> dict[str, Any]:
+    """List registered study areas plus the active dataset's spatial framing."""
+    with db_session() as conn:
+        active_row = conn.execute(
+            "SELECT id FROM dataset_sources WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        ctx = dataset_context(conn, int(active_row["id"]) if active_row else None)
+        return {
+            "study_areas": list_study_area_payload(conn),
+            "active": platform_location_payload(conn, ctx),
+            "canonical_epsg": ctx.canonical_epsg,
+            "boundary_enforced": False,
+            "ingestion_scope": "worldwide",
+        }
+
+
+@router.post("/study-areas")
+def create_study_area(req: StudyAreaCreateRequest) -> dict[str, Any]:
+    """Register or update a study area at runtime (validated, persisted, immediately usable)."""
+    try:
+        with db_session() as conn:
+            area = upsert_study_area(conn, req.model_dump(exclude_none=True), provenance="user")
+            payload = area.to_json()
+            payload["created"] = True
+            return payload
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/study-areas/{key}/datasets")
+def create_study_area_dataset(key: str, req: StudyAreaDatasetRequest) -> dict[str, Any]:
+    """Create an empty dataset for a study area; reports and networks can then be ingested."""
+    try:
+        with db_session() as conn:
+            return create_dataset_for_study_area(
+                conn,
+                study_area_key=key,
+                name=req.name,
+                description=req.description,
+                lixel_resolution_m=req.lixel_resolution_m,
+                is_synthetic=req.is_synthetic,
+                activate=req.activate,
+                actor_role=_trusted_role(req.actor_role),
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/ingest/network")
+def ingest_network_geojson(req: NetworkImportRequest) -> dict[str, Any]:
+    """Import a road network from GeoJSON expressed in any EPSG, for any place on Earth."""
+    payload: dict[str, Any] | None = req.geojson
+    if req.geojson_url:
+        # Remote fetching can reach private infrastructure or follow unsafe redirects.
+        # Operators must obtain and validate the file separately and submit inline GeoJSON.
+        raise HTTPException(status_code=422, detail="Remote network URLs are disabled; provide inline GeoJSON.")
+    if payload is None:
+        raise HTTPException(status_code=422, detail="Provide either an inline geojson payload or geojson_url.")
+
+    try:
+        with db_session() as conn:
+            dataset_id = req.dataset_id
+            if dataset_id is None:
+                created = create_dataset_for_study_area(
+                    conn,
+                    study_area_key=req.study_area_key or _default_study_area_key(conn),
+                    name=req.dataset_name,
+                    description="Imported road network",
+                    lixel_resolution_m=req.lixel_resolution_m,
+                    is_synthetic=False,
+                    activate=True,
+                    actor_role=_trusted_role(req.actor_role),
+                )
+                dataset_id = int(created["dataset_id"])
+            return import_network_geojson(
+                conn,
+                dataset_id=int(dataset_id),
+                geojson=payload,
+                epsg_in=req.epsg_in,
+                lixel_resolution_m=req.lixel_resolution_m,
+                dataset_name=req.dataset_name,
+                study_area_key=req.study_area_key,
+                activate=req.activate,
+                actor_role=_trusted_role(req.actor_role),
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/ingest/events")
+def list_ingestion_events(
+    dataset_id: int | None = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=200),
+) -> dict[str, Any]:
+    with db_session() as conn:
+        ds_id = _resolve_dataset_id(conn, dataset_id)
+        rows = conn.execute(
+            """
+            SELECT id, source_type, study_area_key, epsg_in, feature_count, rejected_count,
+                   outside_boundary_count, report_json, created_at_utc
+            FROM ingestion_events
+            WHERE dataset_id = ? OR ? IS NULL
+            ORDER BY id DESC LIMIT ?
+            """,
+            (ds_id, dataset_id, limit),
+        ).fetchall()
+        return {
+            "dataset_id": ds_id,
+            "events": [
+                {
+                    **dict(r),
+                    "report": json.loads(r["report_json"] or "{}"),
+                }
+                for r in rows
+            ],
+        }
+
+
+def _default_study_area_key(conn: sqlite3.Connection) -> str:
+    row = conn.execute(
+        "SELECT study_area_key FROM dataset_sources WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row and row["study_area_key"]:
+        return str(row["study_area_key"])
+    return resolve_study_area(None, conn).key
+
+
+@router.get("/vgi/location-context")
+def vgi_location_context(
+    dataset_id: int | None = Query(default=None),
+) -> dict[str, Any]:
+    """Explicit, machine-readable statement of where ingestion is allowed.
+
+    RoadScope accepts citizen reports anywhere: there is no study-area hard boundary. The
+    response exposes the active dataset's CRS, its optional boundary, and whether a report
+    outside that boundary would be stored (with a flag) or rejected.
+    """
+    with db_session() as conn:
+        ds_id = _resolve_dataset_id(conn, dataset_id)
+        ctx = dataset_context(conn, ds_id)
+        return {
+            "dataset_id": ds_id,
+            "canonical_epsg": ctx.canonical_epsg,
+            "study_area_key": ctx.study_area_key,
+            "boundary_4326": ctx.boundary,
+            "boundary_geometry": bbox_geojson(ctx.boundary) if ctx.boundary else None,
+            "ingestion_scope": "worldwide",
+            "rejects_outside_boundary": False,
+            "records_outside_boundary_flag": True,
+            "network_bbox_4326": dataset_bbox(conn, ds_id),
+            "notes": (
+                "Reports are accepted for any WGS84 coordinate representable in the dataset CRS. "
+                "A study-area boundary is metadata used for framing and provenance only."
+            ),
+        }

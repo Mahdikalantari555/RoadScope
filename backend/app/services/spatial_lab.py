@@ -12,11 +12,11 @@ from scipy.stats import spearmanr
 from shapely.geometry import MultiPoint
 from shapely.ops import unary_union
 
-from ..config import CANONICAL_EPSG
+from ..context import dataset_context
 from ..crs import (
     extract_lixel_linestring,
-    linestring_25832_to_geojson_dict,
-    polygon_25832_to_geojson_dict,
+    linestring_to_geojson_dict,
+    polygon_to_geojson_dict,
 )
 from ..db import log_audit_event, utc_now_iso
 from .allocations import incident_distribution
@@ -184,6 +184,7 @@ def _save_analysis_job(
     actor_role: str = "gis_researcher",
 ) -> int:
     now = utc_now_iso()
+    epsg = dataset_context(conn, dataset_id).canonical_epsg
     cur = conn.execute(
         """
         INSERT INTO spatial_analysis_jobs
@@ -195,7 +196,7 @@ def _save_analysis_job(
             dataset_id,
             job_type,
             json.dumps(parameters),
-            CANONICAL_EPSG,
+            epsg,
             sample_size,
             round(runtime_ms, 2),
             now,
@@ -251,6 +252,7 @@ def run_nkde_analysis(
     (Planar - NKDE), optional VGI fractional candidate propagation, and quantitative
     Ground-Truth PAI/RRI/RMSE benchmarks for BOTH methods.
     """
+    epsg = dataset_context(conn, dataset_id).canonical_epsg
     t0 = time.perf_counter()
     if bandwidth_m < 15.0 or bandwidth_m > 1500.0:
         raise ValueError("Bandwidth h_net must lie between 15m and 1500m.")
@@ -475,7 +477,7 @@ def run_nkde_analysis(
     math_notes = {
         "method": "Mass-Conserving Lixel Network Kernel Density Estimation (Okabe-Sugihara / Diggle)",
         "formula_latex": r"\hat{\lambda}_{\mathrm{NKDE}}(q) = \sum_{i=1}^{n} w_i \frac{K(d_{\mathrm{net}}(q,s_i)/h_{\mathrm{net}})}{\sum_{q' \in \mathcal{L}} K(d_{\mathrm{net}}(q',s_i)/h_{\mathrm{net}})\,|\ell_{q'}|}",
-        "crs": f"EPSG:{CANONICAL_EPSG} (ETRS89 / UTM Zone 32N, meters)",
+        "crs": f"EPSG:{epsg} ({dataset_context(conn, dataset_id).crs_name}, meters)",
         "planar_comparison_note": "Planar Euclidean KDE uses 2D straight-line distances d_Euc, causing topological spillover across Main River bridges, parallel quays, and the grade-separated City-Viadukt overpass.",
     }
     geojson_fc = {"type": "FeatureCollection", "features": features}
@@ -507,7 +509,7 @@ def run_nkde_analysis(
     return {
         "job_id": job_id,
         "job_type": "NKDE",
-        "crs_epsg": CANONICAL_EPSG,
+        "crs_epsg": epsg,
         "runtime_ms": round(runtime_ms, 2),
         "parameters": params,
         "summary_metrics": summary,
@@ -537,6 +539,7 @@ def run_network_autocorrelation(
     validates statistical assumptions, executes Monte Carlo spatial permutations, and applies
     Benjamini-Hochberg False Discovery Rate (FDR) adjustment.
     """
+    epsg = dataset_context(conn, dataset_id).canonical_epsg
     t0 = time.perf_counter()
     topo = get_lixel_network_topology(conn, dataset_id)
     incidents = _fetch_filtered_incidents(
@@ -739,7 +742,7 @@ def run_network_autocorrelation(
     math_notes = {
         "method": "Network Getis-Ord Gi*(d_net) & Local Moran's I with Benjamini-Hochberg FDR",
         "formula_latex": r"G_i^* = \frac{\sum_j w_{ij}x_j - \bar{X}\sum_j w_{ij}}{S\sqrt{\frac{M\sum_j w_{ij}^2 - (\sum_j w_{ij})^2}{M-1}}}, \quad q_i = \min_{k \ge \mathrm{rank}(i)} \frac{M}{k}p_{(k)}",
-        "crs": f"EPSG:{CANONICAL_EPSG}",
+        "crs": f"EPSG:{epsg}",
     }
     geojson_fc = {"type": "FeatureCollection", "features": features}
     params = {
@@ -770,7 +773,7 @@ def run_network_autocorrelation(
     return {
         "job_id": job_id,
         "job_type": "NETWORK_GI_STAR",
-        "crs_epsg": CANONICAL_EPSG,
+        "crs_epsg": epsg,
         "runtime_ms": round(runtime_ms, 2),
         "parameters": params,
         "summary_metrics": summary,
@@ -795,6 +798,7 @@ def run_network_dbscan(
     Evaluates epsilon-neighborhoods strictly via shortest-path graph traversal distance d_net,
     outputting clustered points, topological road subgraphs, and metric buffered convex hulls.
     """
+    epsg = dataset_context(conn, dataset_id).canonical_epsg
     t0 = time.perf_counter()
     if eps_net_m < 10.0 or eps_net_m > 1000.0:
         raise ValueError("eps_net_m must be between 10m and 1000m.")
@@ -872,7 +876,7 @@ def run_network_dbscan(
                     "epdo_sum": round(epdo_total, 1),
                     "color": color,
                 },
-                "geometry": polygon_25832_to_geojson_dict(hull_25832),
+                "geometry": polygon_to_geojson_dict(hull_25832),
             }
         )
 
@@ -892,7 +896,7 @@ def run_network_dbscan(
             seg_names.append(smeta["name"])
             m0 = max(0.0, min(offsets) - 15.0)
             m1 = min(smeta["length_m"], max(offsets) + 15.0)
-            sub_line = extract_lixel_linestring(smeta["geom_25832"], m0, m1)
+            sub_line = extract_lixel_linestring(smeta["geom_m"], m0, m1)
             subgraph_len_m += float(sub_line.length)
             features.append(
                 {
@@ -904,7 +908,7 @@ def run_network_dbscan(
                         "segment_name": smeta["name"],
                         "color": color,
                     },
-                    "geometry": linestring_25832_to_geojson_dict(sub_line),
+                    "geometry": linestring_to_geojson_dict(sub_line),
                 }
             )
 
@@ -967,7 +971,7 @@ def run_network_dbscan(
     math_notes = {
         "method": "Network-Constrained DBSCAN (N-DBSCAN)",
         "formula_latex": r"N_{\varepsilon_{\mathrm{net}}}(s_i) = \{s_j \in \mathcal{S} : d_{\mathrm{net}}(s_i, s_j) \le \varepsilon_{\mathrm{net}}\}, \quad |N_{\varepsilon_{\mathrm{net}}}(s_i)| \ge \mathrm{MinPts}",
-        "crs": f"EPSG:{CANONICAL_EPSG}",
+        "crs": f"EPSG:{epsg}",
     }
     geojson_fc = {"type": "FeatureCollection", "features": features}
     params = {
@@ -994,7 +998,7 @@ def run_network_dbscan(
     return {
         "job_id": job_id,
         "job_type": "N_DBSCAN",
-        "crs_epsg": CANONICAL_EPSG,
+        "crs_epsg": epsg,
         "runtime_ms": round(runtime_ms, 2),
         "parameters": params,
         "summary_metrics": summary,
@@ -1016,6 +1020,7 @@ def run_covariate_cross_comparison(
     Cross-tabulates crash density and severity against environmental conditions (weather, lighting,
     road surface) and geometric infrastructure attributes (road class, speed limit, sinuosity, junction degree).
     """
+    epsg = dataset_context(conn, dataset_id).canonical_epsg
     statuses = (
         ("verified_canonical", "corroborated_pending", "unverified_raw_vgi")
         if include_unverified_vgi

@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from ..config import CANONICAL_EPSG
+from ..context import dataset_context
 from .cure_diagnostics import cure_by_aadt
 from .length_spf import fit_length_scaled_nb_spf
 
@@ -326,7 +326,7 @@ def compute_exposure_risk_and_eb(
         row_item["priority_rank"] = rk
 
     return {
-        "crs_epsg": CANONICAL_EPSG,
+        "crs_epsg": dataset_context(conn, dataset_id).canonical_epsg,
         "metric_epistemology_disclaimer": (
             "MCDA Vulnerability Index (0-100) is an interpretable multi-criteria decision-support score, "
             "NOT a calibrated crash probability. Use Empirical Bayes Expected Crashes (EB) and PSI for "

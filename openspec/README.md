@@ -16,6 +16,7 @@
 | [surrogate-safety-fusion](changes/surrogate-safety-fusion/) | شاخص‌های جایگزین ایمنی |
 | [reproducible-research-benchmarks](changes/reproducible-research-benchmarks/) | محک‌زنی چندبذری، چندمقیاسه و PAI |
 | [advanced-network-research](changes/advanced-network-research/) | روش‌های تکمیلی Voronoi، link–node، HMM و GNN |
+| [generalized-study-areas](changes/generalized-study-areas/) | مناطق مطالعاتی و درون‌ریزی شبکه؛ نیازمند بررسی ایمنی |
 | [tehran-synthetic-demo](changes/tehran-synthetic-demo/) | شبکهٔ واقعی مرکز تهران و تصادفات مصنوعی برای ارائه |
 | [tehran-citizen-reporting](changes/tehran-citizen-reporting/) | گزارش واقعی شهروندی، بازبینی و حریم خصوصی؛ مستقل از دادهٔ مصنوعی |
 | [frontend-experience-improvements](changes/frontend-experience-improvements/) | راهنما، جزئیات، فیلترها و نمای ارائه با الگوهای منتخب نمونه‌ها |

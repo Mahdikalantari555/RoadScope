@@ -1,4 +1,4 @@
-// Perceptual Colorblind-Safe Palettes & ETRS89 / UTM 32N Live Readout Math
+// Perceptual Colorblind-Safe Palettes & CRS-agnostic Live Coordinate Readout Math
 
 export const VIRIDIS_STOPS: [number, string][] = [
   [0.0, '#440154'],
@@ -40,54 +40,24 @@ export const BIVARIATE_3X3: Record<string, string> = {
 };
 
 /**
- * Exact GRS80 / WGS84 Transverse Mercator forward projection to EPSG:25832 (UTM Zone 32N, central meridian 9°E)
- * for zero-latency 60fps metric coordinate cursor readouts on the cartographic canvas.
+ * WGS84 -> Web Mercator (EPSG:3857) forward projection, the platform's default canonical
+ * metric CRS. Any study area may declare another projected CRS; for those, the backend
+ * remains the authority on metric coordinates (see `POST /api/v1/crs/project`). This local
+ * projection only powers the zero-latency cursor readout.
  */
+export function wgs84ToMetric(lonDeg: number, latDeg: number, epsg = 3857): { x_m: number; y_m: number } {
+  if (epsg === 3857 || epsg === 900913) {
+    const R = 6378137.0;
+    const clampedLat = Math.max(-85.05112878, Math.min(85.05112878, latDeg));
+    const x = R * (lonDeg * Math.PI) / 180.0;
+    const y = R * Math.log(Math.tan(Math.PI / 4 + (clampedLat * Math.PI) / 360.0));
+    return { x_m: Math.round(x * 10) / 10, y_m: Math.round(y * 10) / 10 };
+  }
+  // Unsupported local projection: fall back to Web Mercator for the readout only.
+  return wgs84ToMetric(lonDeg, latDeg, 3857);
+}
+
+/** @deprecated kept for backwards compatibility; prefer `wgs84ToMetric(lon, lat, epsg)`. */
 export function wgs84ToUtm32N(lonDeg: number, latDeg: number): { x_m: number; y_m: number } {
-  const a = 6378137.0;
-  const f = 1 / 298.257222101;
-  const k0 = 0.9996;
-  const lon0 = (9.0 * Math.PI) / 180.0;
-  const e2 = 2 * f - f * f;
-  const ep2 = e2 / (1 - e2);
-
-  const phi = (latDeg * Math.PI) / 180.0;
-  const lam = (lonDeg * Math.PI) / 180.0;
-  const sinPhi = Math.sin(phi);
-  const cosPhi = Math.cos(phi);
-  const tanPhi = Math.tan(phi);
-
-  const N = a / Math.sqrt(1 - e2 * sinPhi * sinPhi);
-  const T = tanPhi * tanPhi;
-  const C = ep2 * cosPhi * cosPhi;
-  const A = cosPhi * (lam - lon0);
-
-  const M =
-    a *
-    ((1 - e2 / 4 - (3 * e2 * e2) / 64 - (5 * e2 * e2 * e2) / 256) * phi -
-      ((3 * e2) / 8 + (3 * e2 * e2) / 32 + (45 * e2 * e2 * e2) / 1024) * Math.sin(2 * phi) +
-      ((15 * e2 * e2) / 256 + (45 * e2 * e2 * e2) / 1024) * Math.sin(4 * phi) -
-      ((35 * e2 * e2 * e2) / 3072) * Math.sin(6 * phi));
-
-  const x_m =
-    500000.0 +
-    k0 *
-      N *
-      (A +
-        ((1 - T + C) * Math.pow(A, 3)) / 6 +
-        ((5 - 18 * T + T * T + 72 * C - 58 * ep2) * Math.pow(A, 5)) / 120);
-
-  const y_m =
-    k0 *
-    (M +
-      N *
-        tanPhi *
-        ((A * A) / 2 +
-          ((5 - T + 9 * C + 4 * C * C) * Math.pow(A, 4)) / 24 +
-          ((61 - 58 * T + T * T + 600 * C - 330 * ep2) * Math.pow(A, 6)) / 720));
-
-  return {
-    x_m: Math.round(x_m * 10) / 10,
-    y_m: Math.round(y_m * 10) / 10,
-  };
+  return wgs84ToMetric(lonDeg, latDeg, 3857);
 }

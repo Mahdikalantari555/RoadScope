@@ -18,6 +18,8 @@ class SimulationRequest(BaseModel):
     vgi_duplicate_rate: float = Field(default=0.35, ge=0.0, le=1.0)
     vgi_false_alarm_count: int = Field(default=12, ge=0, le=100)
     study_period_years: float = Field(default=1.0, ge=0.25, le=5.0)
+    study_area_key: str | None = None
+    network_generator: str | None = None
     actor_role: str = "simulation_scientist"
 
 
@@ -66,6 +68,11 @@ class CitizenReportSubmitRequest(BaseModel):
     narrative: str = ""
     attachment_filenames: list[str] = Field(default_factory=list)
     selected_segment_id: int | None = None
+    # Ingestion is not geographically restricted: a report outside the study-area boundary is
+    # recorded with an out-of-area flag instead of being rejected.
+    allow_outside_study_area: bool = True
+    reported_from_country_code: str = ""
+    geocode_source: str = "map_click"
     actor_role: str = "citizen_reporter"
 
 
@@ -156,7 +163,43 @@ class CmvQueryRequest(BaseModel):
 
 
 class CoordinateProjectRequest(BaseModel):
+    dataset_id: int | None = None
     lon: float | None = None
     lat: float | None = None
     x_m: float | None = None
     y_m: float | None = None
+
+
+class StudyAreaCreateRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+    name_en: str = Field(min_length=1, max_length=160)
+    name_fa: str = ""
+    country_code: str = ""
+    canonical_epsg: int = Field(default=3857, gt=0)
+    center_4326: list[float] = Field(default_factory=lambda: [51.3890, 35.6892], min_length=2, max_length=2)
+    boundary_4326: list[float] | None = None
+    network_source: str = "imported"
+    notes: str = ""
+
+
+class StudyAreaDatasetRequest(BaseModel):
+    name: str | None = None
+    description: str = ""
+    lixel_resolution_m: float = Field(default=25.0, ge=10.0, le=100.0)
+    is_synthetic: bool = False
+    activate: bool = True
+    actor_role: str = "data_steward"
+
+
+class NetworkImportRequest(BaseModel):
+    """Region-agnostic road-network ingestion from GeoJSON in any source EPSG."""
+
+    dataset_id: int | None = None
+    study_area_key: str | None = None
+    dataset_name: str | None = None
+    epsg_in: int = Field(default=4326, gt=0, le=100000)
+    lixel_resolution_m: float = Field(default=25.0, ge=10.0, le=100.0)
+    geojson: dict[str, Any] | None = None
+    geojson_url: str | None = None
+    activate: bool = True
+    actor_role: str = "data_steward"

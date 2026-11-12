@@ -17,8 +17,8 @@ def test_client() -> TestClient:
         env.setenv("ROADSCOPE_DEMO_MODE", "true")
         env.setenv("ROADSCOPE_SQLITE_PATH", str(db_file))
         env.setenv("UAI_SQLITE_PATH", str(db_file))
-        env.setenv("ROADSCOPE_CANONICAL_EPSG", "25832")
         env.setenv("ROADSCOPE_WEB_EPSG", "4326")
+        env.setenv("ROADSCOPE_DEFAULT_STUDY_AREA", "tehran")
         env.setenv("ROADSCOPE_DEFAULT_SEED", "42")
 
         import importlib
@@ -43,13 +43,23 @@ def test_health_and_dual_crs_meta(test_client: TestClient) -> None:
     res = test_client.get("/api/v1/health")
     assert res.status_code == 200
     body = res.json()
-    assert body["canonical_crs"] == "EPSG:25832"
+    # The default demo dataset is Tehran (metric EPSG:3857, valid worldwide).
+    assert body["canonical_crs"] == "EPSG:3857"
     assert body["web_crs"] == "EPSG:4326"
+    assert body["study_area_key"] == "tehran"
     assert body["datasets_initialized"] >= 1
 
     meta = test_client.get("/api/v1/meta").json()
     assert meta["active_dataset"]["is_synthetic"] is True
-    assert meta["active_dataset"]["crs_epsg"] == 25832
+    assert meta["active_dataset"]["crs_epsg"] == 3857
+    assert meta["active_dataset"]["study_area_key"] == "tehran"
+    assert meta["ingestion_scope"] == "worldwide"
+    assert meta["boundary_enforced"] is False
+    assert any(a["key"] == "tehran" for a in meta["study_areas"])
+    # The map framing comes from the data, not from a hard-coded city.
+    assert meta["study_area_key"] == "tehran"
+    assert 51.0 < meta["center_4326"][0] < 51.7 and 35.4 < meta["center_4326"][1] < 35.9
+    assert meta["network_bbox_4326"] is None or meta["network_bbox_4326"]["min_lon"] > 50.0
     assert len(meta["categories"]) >= 7
     assert len(meta["severities"]) == 4
 
@@ -79,15 +89,19 @@ def test_directed_network_topology_api(test_client: TestClient) -> None:
 
 
 def test_crs_roundtrip_projection(test_client: TestClient) -> None:
-    p1 = test_client.post("/api/v1/crs/project", json={"x_m": 477600.0, "y_m": 5551950.0})
+    # Round-trip a Tehran coordinate through the active dataset's metric CRS.
+    p2 = test_client.post("/api/v1/crs/project", json={"lon": 51.3890, "lat": 35.6892}).json()
+    assert 51.3 < p2["lon"] < 51.5 and 35.6 < p2["lat"] < 35.8
+    assert p2["srid"] == 3857
+
+    p1 = test_client.post("/api/v1/crs/project", json={"x_m": p2["x_m"], "y_m": p2["y_m"]})
     assert p1.status_code == 200
     d1 = p1.json()
-    assert 8.60 < d1["lon"] < 8.78
-    assert 50.05 < d1["lat"] < 50.18
+    assert abs(d1["lon"] - 51.3890) < 1e-4
+    assert abs(d1["lat"] - 35.6892) < 1e-4
 
-    p2 = test_client.post("/api/v1/crs/project", json={"lon": d1["lon"], "lat": d1["lat"]}).json()
-    assert abs(p2["x_m"] - 477600.0) < 0.05
-    assert abs(p2["y_m"] - 5551950.0) < 0.05
+
+DEMO_ORIGIN_3857 = (5719500.0, 4252000.0)
 
 
 def test_network_distance_exceeds_euclidean_across_river_and_overpass() -> None:
@@ -101,13 +115,13 @@ def test_network_distance_exceeds_euclidean_across_river_and_overpass() -> None:
         ds_id = int(conn.execute("SELECT id FROM dataset_sources WHERE is_active = 1").fetchone()["id"])
         topo = get_lixel_network_topology(conn, ds_id)
 
-        # Find two river quays on opposite banks of the Main River (Schaumainkai vs Mainkai at column 2)
+        # Two river quays on opposite banks of the demo river channel.
         s_south = conn.execute(
-            "SELECT id, length_m FROM road_segments WHERE dataset_id = ? AND name LIKE 'Schaumainkai%[3]%'",
+            "SELECT id, length_m FROM road_segments WHERE dataset_id = ? AND name = 'South Riverbank Quay (3)'",
             (ds_id,),
         ).fetchone()
         s_north = conn.execute(
-            "SELECT id, length_m FROM road_segments WHERE dataset_id = ? AND name LIKE 'Mainkai (North Quay)%[3]%'",
+            "SELECT id, length_m FROM road_segments WHERE dataset_id = ? AND name = 'North Riverbank Quay (3)'",
             (ds_id,),
         ).fetchone()
         assert s_south and s_north
@@ -119,17 +133,21 @@ def test_network_distance_exceeds_euclidean_across_river_and_overpass() -> None:
             int(s_north["id"]),
             float(s_north["length_m"]) * 0.5,
         )
-        # Straight-line distance across the Main River is ~320m, whereas shortest-path via bridge is > 750m!
-        assert d_net > 750.0
+        # The straight line between the quays is ~700 m (the river channel), while the only
+        # topological route is via a bridge, so the network distance must be strictly larger.
+        assert d_net > 1000.0
 
-        # Grade-separated overpass midspan vs crossed Berliner Strasse underneath:
+        # Grade-separated expressway midspan vs the surface street crossed underneath:
         s_ovp = conn.execute(
-            "SELECT id, length_m FROM road_segments WHERE dataset_id = ? AND elevation_level = 1 AND name LIKE '%Elevated Span Süd%'",
+            "SELECT id, length_m FROM road_segments WHERE dataset_id = ? AND elevation_level = 1 "
+            "AND name = 'Sadr Expressway Elevated Span South'",
             (ds_id,),
         ).fetchone()
         s_art = conn.execute(
-            "SELECT id, length_m FROM road_segments WHERE dataset_id = ? AND elevation_level = 0 AND name LIKE '%Berliner%[3]%'",
-            (ds_id,),
+            "SELECT id, length_m FROM road_segments WHERE dataset_id = ? AND elevation_level = 0 "
+            "AND min_x <= ? AND max_x >= ? AND min_y <= ? AND max_y >= ? ORDER BY id LIMIT 1",
+            (ds_id, DEMO_ORIGIN_3857[0] + 1780.0, DEMO_ORIGIN_3857[0] + 1780.0,
+             DEMO_ORIGIN_3857[1] + 1400.0, DEMO_ORIGIN_3857[1] + 1400.0),
         ).fetchone()
         assert s_ovp and s_art
         d_ovp_net = exact_network_distance_between_snapped_points(
@@ -139,21 +157,22 @@ def test_network_distance_exceeds_euclidean_across_river_and_overpass() -> None:
             int(s_art["id"]),
             20.0,
         )
-        # Despite crossing right over Berliner Strasse in 2D (<30m Euclidean), network path must travel to terminal ramp (>1400m)!
+        # Despite crossing the surface street in 2D, the network path must travel to a ramp.
         assert d_ovp_net > 1400.0
 
 
 def test_probabilistic_topological_map_matching_overpass_disambiguation(test_client: TestClient) -> None:
     """
-    Verify US-3.1: At the grade-separated overpass crossing (E=477604, N=5551955),
-    a PEDESTRIAN_CROSSING crash located closer in 2D Euclidean space to the elevated motorway
-    centerline MUST be topologically matched to the surface arterial underneath!
+    Verify US-3.1: at a point beneath the elevated expressway span, a PEDESTRIAN_CROSSING
+    report must be topologically matched to the surface street underneath rather than to the
+    elevated motorway deck.
     """
+    origin_x, origin_y = DEMO_ORIGIN_3857
     res = test_client.post(
         "/api/v1/vgi/preview-snap-and-conflate",
         json={
-            "x_m": 477604.0,
-            "y_m": 5551962.0,
+            "x_m": origin_x + 1782.0,
+            "y_m": origin_y + 1395.0,
             "observational_radius_m": 22.0,
             "occurred_at_utc": "2026-11-08T17:30:00Z",
             "category_code": "PEDESTRIAN_CROSSING",
@@ -168,12 +187,13 @@ def test_probabilistic_topological_map_matching_overpass_disambiguation(test_cli
 
 
 def test_vgi_validation_corroboration_and_steward_rbac(test_client: TestClient) -> None:
-    # 1. Out-of-bounds metric coordinates rejected
-    bad_coord = test_client.post(
+    # 1. Coordinates are no longer rejected because they are outside a city: a valid WGS84 point
+    #    anywhere on Earth is ingestible (it is flagged when outside the study-area boundary).
+    far_away = test_client.post(
         "/api/v1/vgi/submit",
         json={
-            "x_m": 100000.0,
-            "y_m": 100000.0,
+            "lon": -58.3816,
+            "lat": -34.6037,  # Buenos Aires, far outside the demo Tehran boundary
             "observational_radius_m": 15.0,
             "occurred_at_utc": "2026-11-09T10:00:00Z",
             "reported_at_utc": "2026-11-09T10:15:00Z",
@@ -181,14 +201,29 @@ def test_vgi_validation_corroboration_and_steward_rbac(test_client: TestClient) 
             "severity_code": "PDO",
         },
     )
-    assert bad_coord.status_code == 422
+    assert far_away.status_code == 200, far_away.text
+    assert far_away.json()["outside_study_area"] is True
+    assert far_away.json()["study_area_key"] == "tehran"
+
+    # ... but genuinely invalid geographic input and non-representable metric input still fail.
+    invalid_geo = test_client.post(
+        "/api/v1/vgi/submit",
+        json={
+            "lon": 500.0,
+            "lat": 35.0,
+            "occurred_at_utc": "2026-11-09T10:00:00Z",
+            "category_code": "REAR_END",
+            "severity_code": "PDO",
+        },
+    )
+    assert invalid_geo.status_code == 422
 
     # 2. Temporal sanity check: occurred_at AFTER reported_at rejected
     bad_time = test_client.post(
         "/api/v1/vgi/submit",
         json={
-            "x_m": 477800.0,
-            "y_m": 5551950.0,
+            "x_m": DEMO_ORIGIN_3857[0] + 1300.0,
+            "y_m": DEMO_ORIGIN_3857[1] + 700.0,
             "observational_radius_m": 15.0,
             "occurred_at_utc": "2026-11-09T12:00:00Z",
             "reported_at_utc": "2026-11-09T10:00:00Z",
@@ -202,8 +237,8 @@ def test_vgi_validation_corroboration_and_steward_rbac(test_client: TestClient) 
     ok_sub = test_client.post(
         "/api/v1/vgi/submit",
         json={
-            "x_m": 477820.0,
-            "y_m": 5551952.0,
+            "x_m": DEMO_ORIGIN_3857[0] + 1350.0,
+            "y_m": DEMO_ORIGIN_3857[1] + 720.0,
             "observational_radius_m": 16.0,
             "occurred_at_utc": "2026-11-09T08:15:00Z",
             "reported_at_utc": "2026-11-09T08:22:00Z",
@@ -345,7 +380,7 @@ def test_empirical_bayes_rtm_smoothing_and_cmv_cross_filtering(test_client: Test
         "/api/v1/analytics/cmv",
         json={
             "verification_mode": "verified_only",
-            "bbox_4326": [8.675, 50.108, 8.690, 50.118],
+            "bbox_4326": [51.378, 35.644, 51.384, 35.648],
         },
     ).json()
     assert full_cmv["kpis"]["filtered_incidents"] > sub_cmv["kpis"]["filtered_incidents"] >= 0

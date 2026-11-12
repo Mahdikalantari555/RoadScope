@@ -9,6 +9,7 @@ from typing import Any
 from shapely.geometry import Point
 from shapely.wkt import loads as wkt_loads
 
+from ..context import dataset_context
 from ..crs import interpolate_lrs_point, to_wgs84
 from .network_generator import (
     exact_network_distance_between_snapped_points,
@@ -75,7 +76,7 @@ def compute_topological_snap_candidates(
     rows = conn.execute(
         """
         SELECT s.id, s.edge_code, s.name, s.road_class, s.speed_limit_kmh, s.lanes,
-               s.length_m, s.elevation_level, s.wkt_25832,
+               s.length_m, s.elevation_level, s.wkt_m,
                nu.degree AS u_deg, nu.node_type AS u_type,
                nv.degree AS v_deg, nv.node_type AS v_type
         FROM rtree_road_segments r
@@ -100,7 +101,7 @@ def compute_topological_snap_candidates(
         rows = conn.execute(
             """
             SELECT s.id, s.edge_code, s.name, s.road_class, s.speed_limit_kmh, s.lanes,
-                   s.length_m, s.elevation_level, s.wkt_25832,
+                   s.length_m, s.elevation_level, s.wkt_m,
                    nu.degree AS u_deg, nu.node_type AS u_type,
                    nv.degree AS v_deg, nv.node_type AS v_type
             FROM road_segments s
@@ -111,6 +112,7 @@ def compute_topological_snap_candidates(
             (dataset_id,),
         ).fetchall()
 
+    ctx = dataset_context(conn, dataset_id)
     priors = _load_category_priors(conn, category_code)
     pt = Point(float(raw_x_m), float(raw_y_m))
     sigma_r = max(8.0, 0.55 * float(observational_radius_m))
@@ -120,7 +122,7 @@ def compute_topological_snap_candidates(
     naive_nearest_seg_id: int | None = None
 
     for r in rows:
-        line = wkt_loads(r["wkt_25832"])
+        line = wkt_loads(r["wkt_m"])
         L = float(r["length_m"])
         m_proj = float(line.project(pt))
         m_proj = max(0.0, min(m_proj, L))
@@ -158,7 +160,7 @@ def compute_topological_snap_candidates(
             topo_factor = 1.0 + 0.04 * max(0, max_end_deg - 2)
 
         unnorm_score = spatial_lh * class_prior * topo_factor
-        slon, slat = to_wgs84(sx_m, sy_m)
+        slon, slat = to_wgs84(sx_m, sy_m, ctx.canonical_epsg)
         lixel_id = _find_lixel_for_offset(conn, int(r["id"]), m_proj)
 
         scored.append(

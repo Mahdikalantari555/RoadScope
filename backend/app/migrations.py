@@ -12,6 +12,13 @@ from .config import MIGRATIONS_DIR
 
 backup_database = copy_database
 
+# Migrations that rebuild referenced tables (SQLite cannot drop CHECK constraints or rename
+# columns in place) opt in with this header. They run with foreign keys deferred and
+# `legacy_alter_table` ON so that `ALTER TABLE ... RENAME` does not rewrite the references of
+# dependent tables, and the whole batch is verified with `PRAGMA foreign_key_check` before the
+# transaction is committed.
+FOREIGN_KEYS_OFF_HEADER = "-- @foreign-keys-off"
+
 
 def _statements(script: str):
     buffer = ""
@@ -64,8 +71,21 @@ def apply_migrations(conn: sqlite3.Connection, migrations_dir: Path | None = Non
         copy_database(source, backup_dir / f"{source.stem}-pre-migration-{uuid.uuid4().hex}.sqlite")
 
     applied_now: list[str] = []
+    # `PRAGMA foreign_keys` / `legacy_alter_table` are ignored inside a transaction, so the
+    # table-rebuilding migrations need them set before BEGIN and restored afterwards.
+    needs_rebuild = any(
+        FOREIGN_KEYS_OFF_HEADER in path.read_text(encoding="utf-8") for path in pending
+    )
+    fk_was_on = bool(conn.execute("PRAGMA foreign_keys").fetchone()[0])
     try:
+        if needs_rebuild:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("PRAGMA legacy_alter_table = ON")
         conn.execute("BEGIN IMMEDIATE")
+        if needs_rebuild:
+            # With foreign keys disabled, deferred enforcement would be a no-op; instead the
+            # batch is validated explicitly by PRAGMA foreign_key_check before COMMIT.
+            conn.execute("PRAGMA defer_foreign_keys = ON")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS schema_migrations ("
             "name TEXT PRIMARY KEY, "
@@ -79,15 +99,29 @@ def apply_migrations(conn: sqlite3.Connection, migrations_dir: Path | None = Non
         for path in files:
             if path.name in current:
                 continue
-            for statement in _statements(path.read_text(encoding="utf-8")):
+            script = path.read_text(encoding="utf-8")
+            rebuilds = FOREIGN_KEYS_OFF_HEADER in script
+            for statement in _statements(script):
                 without_comments = re.sub(r"--[^\n]*", "", statement).strip().upper()
                 if re.match(r"^(BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE|PRAGMA)\b", without_comments):
                     raise ValueError(f"Transaction control is not allowed in {path.name}")
                 conn.execute(statement)
+            if rebuilds:
+                violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+                if violations:
+                    raise RuntimeError(
+                        f"{path.name} left {len(violations)} dangling foreign key reference(s); rolled back"
+                    )
             conn.execute("INSERT INTO schema_migrations (name, sha256) VALUES (?, ?)", (path.name, checksums[path.name]))
             applied_now.append(path.name)
         conn.commit()
     except BaseException:
         conn.rollback()
         raise
+    finally:
+        if needs_rebuild:
+            conn.execute("PRAGMA legacy_alter_table = OFF")
+            conn.execute(f"PRAGMA foreign_keys = {'ON' if fk_was_on else 'OFF'}")
+        else:
+            conn.execute(f"PRAGMA foreign_keys = {'ON' if fk_was_on else 'OFF'}")
     return applied_now
