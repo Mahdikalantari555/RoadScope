@@ -85,7 +85,7 @@ def _curved_arc(
 
 
 # ---------------------------------------------------------------------------------------------------
-# Seeded demo network: Tehran (EPSG:3857 metric, world-valid CRS)
+# Seeded demo network: central Tehran, authored natively in EPSG:32639 (UTM 39N, metres).
 #
 # The network is an explicitly labelled synthetic realization used for demonstration and for
 # exercising the platform's geometry (river crossings, grade-separated expressway, one-way
@@ -93,11 +93,23 @@ def _curved_arc(
 # Any other city is supported by importing a GeoJSON road network (see services/ingest.py).
 # ---------------------------------------------------------------------------------------------------
 
-TEHRAN_DEMO_ORIGIN_3857 = (5719500.0, 4252000.0)  # metres, near Tehran city centre
+# Central-Tehran origin in the analytical metric CRS. Geometry is authored in EPSG:32639 so no
+# Web-Mercator scale distortion enters metric distances, lixel lengths or risk denominators.
+TEHRAN_DEMO_ORIGIN_32639 = (535000.0, 3949600.0)  # metres, near Tehran city centre
+TEHRAN_DEMO_CRS = 32639
+
+# Kept only as a documentation constant: the pre-generalization demo authored geometry in Web
+# Mercator. Nothing transforms from it any more (see `create_network_and_lixels`).
+TEHRAN_DEMO_ORIGIN_3857 = TEHRAN_DEMO_ORIGIN_32639
+
+
+def generator_source_epsg(generator_key: str = "tehran_demo_v1") -> int:
+    """Metric CRS in which a generator authors its geometry (never assumed by callers)."""
+    return TEHRAN_DEMO_CRS if generator_key in NETWORK_GENERATORS else TEHRAN_DEMO_CRS
 
 
 def _tehran_nodes_and_edges() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    ox, oy = TEHRAN_DEMO_ORIGIN_3857
+    ox, oy = TEHRAN_DEMO_ORIGIN_32639
     # 6 x 5 lattice of 700 m blocks => ~3.5 km x 2.8 km demo extent.
     xs = [ox + 700.0 * c for c in range(6)]
     ys = [oy + 700.0 * r for r in range(5)]
@@ -150,6 +162,9 @@ def _tehran_nodes_and_edges() -> tuple[list[dict[str, Any]], list[dict[str, Any]
         elev: int = 0,
         slope_pct: float = 0.4,
         is_directed: int = 0,
+        grade_source: str = "synthetic_authoring",
+        direction_source: str = "",
+        source_feature_id: str = "",
     ) -> None:
         counter["n"] += 1
         ux, uy, _ = lookup[u]
@@ -169,6 +184,12 @@ def _tehran_nodes_and_edges() -> tuple[list[dict[str, Any]], list[dict[str, Any]
                 "slope_pct": slope_pct,
                 "is_directed": is_directed,
                 "coords": coords,
+                "grade_source": grade_source,
+                "direction_source": direction_source or (
+                    "synthetic_oneway_pair" if is_directed else "assumed_bidirectional"
+                ),
+                "source_feature_id": source_feature_id or f"SYN-TEH-v1-{counter['n']:03d}",
+                "topology_ambiguous": 0,
             }
         )
 
@@ -246,7 +267,7 @@ def _tehran_nodes_and_edges() -> tuple[list[dict[str, Any]], list[dict[str, Any]
 
 
 def build_tehran_demo_network_spec() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Seeded, explicitly synthetic Tehran demo network (metric EPSG:3857)."""
+    """Seeded, explicitly synthetic central-Tehran demo network (metric EPSG:32639)."""
     return _tehran_nodes_and_edges()
 
 
@@ -289,7 +310,8 @@ def get_study_area_context_geojson(
     features: list[dict[str, Any]] = []
 
     if demo_network in NETWORK_GENERATORS:
-        ox, oy = TEHRAN_DEMO_ORIGIN_3857
+        demo_epsg = TEHRAN_DEMO_CRS
+        ox, oy = TEHRAN_DEMO_ORIGIN_32639
         # River polygon between the demo quay rows (y = oy + 1400 .. oy + 2100).
         river_north = [(ox + 150, oy + 2070), (ox + 1100, oy + 2085), (ox + 2100, oy + 2065), (ox + 3450, oy + 2080)]
         river_south = [(ox + 3450, oy + 1900), (ox + 2100, oy + 1915), (ox + 1100, oy + 1895), (ox + 150, oy + 1905)]
@@ -302,7 +324,7 @@ def get_study_area_context_geojson(
                     "name": "Demo river channel (synthetic geometry)",
                     "is_synthetic": True,
                 },
-                "geometry": polygon_to_geojson_dict(river_poly, 3857),
+                "geometry": polygon_to_geojson_dict(river_poly, demo_epsg),
             }
         )
         parks = [
@@ -320,7 +342,7 @@ def get_study_area_context_geojson(
                 {
                     "type": "Feature",
                     "properties": {"feature_class": "park", "name": pname, "is_synthetic": True},
-                    "geometry": polygon_to_geojson_dict(poly, 3857),
+                    "geometry": polygon_to_geojson_dict(poly, demo_epsg),
                 }
             )
 
@@ -357,6 +379,60 @@ def _dataset_epsg(conn: sqlite3.Connection, dataset_id: int) -> int:
     return dataset_context(conn, dataset_id).canonical_epsg
 
 
+def detect_topology_ambiguities(
+    edges_spec: list[dict[str, Any]],
+    *,
+    snap_tolerance_m: float = 0.05,
+) -> list[dict[str, Any]]:
+    """Report geometric crossings that have no topological connection.
+
+    A crossing is *ambiguous* when two edges intersect geometrically at an interior point while
+    sharing no endpoint node, and their elevation levels differ (a grade-separated crossing) or the
+    shared point is not represented by a node in either edge's vertex list. The importer never
+    fabricates a junction for these; it records them so a steward can review the topology.
+    """
+    from shapely.geometry import LineString as _LineString
+
+    ambiguous: list[dict[str, Any]] = []
+    geometries = []
+    for edge in edges_spec:
+        try:
+            geometries.append(_LineString([(float(x), float(y)) for x, y in edge["coords"]]))
+        except (KeyError, TypeError, ValueError):
+            geometries.append(None)
+
+    for i in range(len(edges_spec)):
+        gi = geometries[i]
+        if gi is None:
+            continue
+        ei = edges_spec[i]
+        shared_i = {ei["u_code"], ei["v_code"]}
+        for j in range(i + 1, len(edges_spec)):
+            gj = geometries[j]
+            if gj is None:
+                continue
+            ej = edges_spec[j]
+            if shared_i & {ej["u_code"], ej["v_code"]}:
+                continue  # a genuine topological connection, not an ambiguity
+            if not gi.intersects(gj):
+                continue
+            cross = gi.intersection(gj)
+            if getattr(cross, "is_empty", True):
+                continue
+            grade_separated = int(ei.get("elevation_level", 0)) != int(ej.get("elevation_level", 0))
+            ambiguous.append(
+                {
+                    "edge_code_a": ei.get("edge_code"),
+                    "edge_code_b": ej.get("edge_code"),
+                    "kind": "grade_separated_crossing" if grade_separated else "geometric_crossing_without_node",
+                    "elevation_a": int(ei.get("elevation_level", 0)),
+                    "elevation_b": int(ej.get("elevation_level", 0)),
+                    "connection_created": False,
+                }
+            )
+    return ambiguous
+
+
 def persist_network_spec(
     conn: sqlite3.Connection,
     *,
@@ -366,15 +442,21 @@ def persist_network_spec(
     lixel_resolution_m: float = 25.0,
     rng_seed: int = 42,
     source: str = "seeded_demo",
+    source_version: str = "",
+    attribution: str = "",
+    license_text: str = "",
+    missing_attribute_count: int | None = None,
 ) -> dict[str, Any]:
     """Persist an arbitrary road network (any city, any metric CRS) plus uniform LRS lixels.
 
     ``nodes_spec``/``edges_spec`` are CRS-neutral: coordinates are metric in the dataset's own
     canonical EPSG, so the same writer serves the seeded demo network, imports from GeoJSON and
-    any future data source.
+    any future data source. Source identifiers, grades and ambiguous crossings are preserved so
+    that real OSM provenance never becomes indistinguishable from synthetic geometry.
     """
     rng = np.random.default_rng(rng_seed)
     epsg = _dataset_epsg(conn, dataset_id)
+    version = source_version or f"{source}:seed{rng_seed}"
 
     deg_map: dict[str, int] = {n["node_code"]: 0 for n in nodes_spec}
     for e in edges_spec:
@@ -388,8 +470,9 @@ def persist_network_spec(
         cur = conn.execute(
             """
             INSERT INTO road_nodes
-            (dataset_id, node_code, node_type, degree, elevation_level, srid, x_m, y_m, lon, lat, wkt_m)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (dataset_id, node_code, node_type, degree, elevation_level, srid, x_m, y_m, lon, lat, wkt_m,
+             source_node_id, source_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dataset_id,
@@ -403,6 +486,8 @@ def persist_network_spec(
                 lon,
                 lat,
                 wkt,
+                str(n.get("source_node_id") or n["node_code"]),
+                version,
             ),
         )
         node_code_to_id[n["node_code"]] = int(cur.lastrowid)
@@ -437,8 +522,9 @@ def persist_network_spec(
             INSERT INTO road_segments
             (dataset_id, edge_code, name, u_node_id, v_node_id, is_directed, road_class,
              speed_limit_kmh, lanes, length_m, sinuosity, slope_pct, elevation_level, aadt,
-             srid, min_x, max_x, min_y, max_y, wkt_m, geojson_4326, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             srid, min_x, max_x, min_y, max_y, wkt_m, geojson_4326, source,
+             source_feature_id, source_version, grade_source, direction_source_detail, topology_ambiguous)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dataset_id,
@@ -463,6 +549,11 @@ def persist_network_spec(
                 line.wkt,
                 geojson_str,
                 source,
+                str(e.get("source_feature_id") or e["edge_code"]),
+                version,
+                str(e.get("grade_source") or "unknown"),
+                str(e.get("direction_source") or "assumed_bidirectional"),
+                1 if int(e.get("topology_ambiguous", 0)) else 0,
             ),
         )
         seg_id = int(cur.lastrowid)
@@ -556,6 +647,7 @@ def persist_network_spec(
                     round(lmax_y, 3),
                     lix_geom.wkt,
                     linestring_to_geojson_str(lix_geom, epsg),
+                    version,
                 )
             )
 
@@ -564,19 +656,67 @@ def persist_network_spec(
         INSERT INTO road_lixels
         (dataset_id, parent_segment_id, lixel_index, m_start_m, m_end_m, length_m, midpoint_m,
          dist_to_nearest_junction_m, true_lambda_per_km_yr, srid, mid_x_m, mid_y_m, mid_lon, mid_lat,
-         min_x, max_x, min_y, max_y, wkt_m, geojson_4326)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         min_x, max_x, min_y, max_y, wkt_m, geojson_4326, source_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         lixel_rows,
     )
 
     invalidate_topology_cache(dataset_id)
+
+    # Topology diagnostics are computed after insertion so they describe exactly what was stored:
+    # ambiguous crossings are never turned into junctions, and missing attributes are counted
+    # rather than silently replaced by invented values.
+    ambiguous = detect_topology_ambiguities(edges_spec)
+    ambiguous_codes = {
+        str(item["edge_code_a"]) for item in ambiguous
+    } | {str(item["edge_code_b"]) for item in ambiguous}
+    if ambiguous_codes:
+        conn.executemany(
+            "UPDATE road_segments SET topology_ambiguous = 1 WHERE dataset_id = ? AND edge_code = ?",
+            [(dataset_id, code) for code in sorted(ambiguous_codes)],
+        )
+
+    if missing_attribute_count is None:
+        missing_attributes = sum(
+            1 for e in edges_spec if not str(e.get("name") or "").strip()
+        )
+    else:
+        missing_attributes = int(missing_attribute_count)
+
+    connected_nodes = {
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT u_node_id FROM road_segments WHERE dataset_id = ? "
+            "UNION SELECT DISTINCT v_node_id FROM road_segments WHERE dataset_id = ?",
+            (dataset_id, dataset_id),
+        ).fetchall()
+    }
+    all_nodes = {int(row[0]) for row in conn.execute(
+        "SELECT id FROM road_nodes WHERE dataset_id = ?", (dataset_id,)
+    ).fetchall()}
+    coverage = {
+        "nodes_total": len(all_nodes),
+        "nodes_connected_to_a_segment": len(connected_nodes),
+        "isolated_nodes": len(all_nodes - connected_nodes),
+        "segments_total": len(segment_records),
+        "segments_flagged_ambiguous": len(ambiguous_codes),
+        "missing_attribute_segments": missing_attributes,
+        "ambiguous_crossings": ambiguous,
+    }
     return {
         "node_count": len(nodes_spec),
         "segment_count": len(segment_records),
         "lixel_count": len(lixel_rows),
         "total_network_length_km": round(sum(s["length_m"] for s in segment_records) / 1000.0, 3),
         "crs_epsg": epsg,
+        "source_version": version,
+        "source": source,
+        "attribution": attribution,
+        "license": license_text,
+        "ambiguous_crossing_count": len(ambiguous),
+        "missing_attribute_count": missing_attributes,
+        "coverage": coverage,
     }
 
 
@@ -591,14 +731,20 @@ def create_network_and_lixels(
     """Populate a dataset's road network from a named seeded generator."""
     nodes_spec, edges_spec = generate_synthetic_network(network_generator)
     epsg = _dataset_epsg(conn, dataset_id)
-    if epsg != 3857:
-        # The built-in geometry is authored in Web Mercator; transform every node and
-        # vertex before assigning the dataset CRS, never reinterpret the raw numbers.
-        node_coords = transform_coords([(n["x_m"], n["y_m"]) for n in nodes_spec], src_epsg=3857, dst_epsg=epsg)
+    src_epsg = generator_source_epsg(network_generator)
+    if epsg != src_epsg:
+        # The generator authors geometry in its own CRS; transform every node and vertex before
+        # assigning the dataset CRS, never reinterpret the raw numbers.
+        node_coords = transform_coords(
+            [(n["x_m"], n["y_m"]) for n in nodes_spec], src_epsg=src_epsg, dst_epsg=epsg
+        )
         for node, (x, y) in zip(nodes_spec, node_coords):
             node["x_m"], node["y_m"] = float(x), float(y)
         for edge in edges_spec:
-            edge["coords"] = [(float(x), float(y)) for x, y in transform_coords(edge["coords"], src_epsg=3857, dst_epsg=epsg)]
+            edge["coords"] = [
+                (float(x), float(y))
+                for x, y in transform_coords(edge["coords"], src_epsg=src_epsg, dst_epsg=epsg)
+            ]
     return persist_network_spec(
         conn,
         dataset_id=dataset_id,

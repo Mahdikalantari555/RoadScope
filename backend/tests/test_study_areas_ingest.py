@@ -89,7 +89,8 @@ def test_location_context_reports_open_ingestion(client: TestClient) -> None:
     assert body["ingestion_scope"] == "worldwide"
     assert body["rejects_outside_boundary"] is False
     assert body["records_outside_boundary_flag"] is True
-    assert body["canonical_epsg"] == 3857
+    # The central-Tehran demo stores metric geometry in UTM 39N (EPSG:32639).
+    assert body["canonical_epsg"] == 32639
     assert body["network_bbox_4326"] is not None
 
 

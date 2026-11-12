@@ -35,6 +35,7 @@ def test_legacy_upgrade_backups_and_repeated_application(tmp_path):
         "003_directed_network.sql",
         "004_research_contracts.sql",
         "005_generalize_study_areas.sql",
+        "006_pilot_provenance_lifecycle.sql",
     ]
     directions = conn.execute("SELECT direction, source FROM road_segment_directions").fetchall()
     assert len(directions) == 3

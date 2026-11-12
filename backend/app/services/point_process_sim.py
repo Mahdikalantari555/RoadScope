@@ -17,16 +17,17 @@ from .map_matching import (
     compute_topological_snap_candidates,
 )
 from .network_generator import (
-    TEHRAN_DEMO_ORIGIN_3857,
+    TEHRAN_DEMO_ORIGIN_32639,
     NETWORK_GENERATORS,
     create_network_and_lixels,
+    generator_source_epsg,
     invalidate_topology_cache,
 )
 from .study_area_service import resolve_study_area
 
 # Demo hotspots are defined relative to the synthetic network origin (see
-# network_generator.TEHRAN_DEMO_ORIGIN_3857) so they stay valid for any CRS.
-_DEMO_OX, _DEMO_OY = TEHRAN_DEMO_ORIGIN_3857
+# network_generator.TEHRAN_DEMO_ORIGIN_32639) so they stay valid for any CRS.
+_DEMO_OX, _DEMO_OY = TEHRAN_DEMO_ORIGIN_32639
 DEMO_HOTSPOTS = [
     (_DEMO_OX + 1770.0, _DEMO_OY + 1420.0, 240.0, 1.65),  # bridge/expressway interchange
     (_DEMO_OX + 2100.0, _DEMO_OY + 1400.0, 260.0, 1.45),  # central signalised hub
@@ -216,6 +217,50 @@ def run_stochastic_network_simulation(
         network_generator=generator or "tehran_demo_v1",
     )
 
+    # Network provenance and incident provenance are recorded separately: the street geometry is
+    # a labelled synthetic realisation while the incidents are simulated observations with a
+    # recorded seed, generator version and parameters (never real crash records).
+    network_provenance = {
+        "network_source": "seeded_demo",
+        "network_generator": generator or "tehran_demo_v1",
+        "generator_version": f"{generator or 'tehran_demo_v1'}:seed{random_seed}",
+        "extract_version": f"{generator or 'tehran_demo_v1'}+seed{random_seed}",
+        "source_attribution": area.extract_attribution or "RoadScope synthetic network",
+        "license": area.extract_license or "Synthetic geometry (no redistributed OSM data)",
+        "snapshot_date": area.extract_snapshot_date,
+        "is_synthetic_geometry": True,
+        "crs_epsg": epsg,
+        "lixel_resolution_m": float(lixel_resolution_m),
+        "ambiguous_crossing_count": net_stats.get("ambiguous_crossing_count", 0),
+        "coverage": net_stats.get("coverage", {}),
+    }
+    incident_provenance = {
+        "incident_provenance": "synthetic",
+        "generator": "roadscope-stochastic-network-sim-v1",
+        "scenario_key": scenario_key,
+        "random_seed": int(random_seed),
+        "parameters": params,
+        "synthetic_exposure": True,
+        "synthetic_environment": True,
+        "note": (
+            "Simulated incidents on a labelled synthetic network. Counts, severities and times are "
+            "illustrative and are never presented as real crash records or measured Tehran risk."
+        ),
+    }
+    conn.execute(
+        """
+        UPDATE dataset_sources
+        SET profile_key = 'demo', network_provenance_json = ?, incident_provenance_json = ?,
+            calibration_status = 'research_only'
+        WHERE id = ?
+        """,
+        (
+            json.dumps(network_provenance, sort_keys=True),
+            json.dumps(incident_provenance, sort_keys=True),
+            dataset_id,
+        ),
+    )
+
     # Load segments + lixels to evaluate exact analytical ground-truth intensity lambda(e, m)
     seg_rows = conn.execute(
         """
@@ -257,7 +302,9 @@ def run_stochastic_network_simulation(
     }
 
     hotspot_points = transform_coords(
-        [(x, y) for x, y, _, _ in DEMO_HOTSPOTS], src_epsg=3857, dst_epsg=epsg
+        [(x, y) for x, y, _, _ in DEMO_HOTSPOTS],
+        src_epsg=generator_source_epsg(),
+        dst_epsg=epsg,
     )
     hotspots = [(float(x), float(y), radius, boost)
                 for (x, y), (_, _, radius, boost) in zip(hotspot_points, DEMO_HOTSPOTS)]
@@ -583,8 +630,10 @@ def run_stochastic_network_simulation(
         ),
     ]
     for idx_ov, (ox, oy, ocat, osev, onarr) in enumerate(overpass_demo_points):
-        if epsg != 3857:
-            ox, oy = transform_coords([(ox, oy)], src_epsg=3857, dst_epsg=epsg)[0]
+        if epsg != generator_source_epsg():
+            ox, oy = transform_coords(
+                [(ox, oy)], src_epsg=generator_source_epsg(), dst_epsg=epsg
+            )[0]
         c_uid, c_trust = citizen_users[idx_ov % len(citizen_users)]
         olon, olat = to_wgs84(ox, oy, epsg)
         cands = compute_topological_snap_candidates(

@@ -4,7 +4,9 @@ export type WorkspaceMode =
   | 'risk_eb'
   | 'citizen_vgi'
   | 'stewardship'
-  | 'simulator';
+  | 'simulator'
+  /** Restricted real-report pilot: closed unless an owner enabled the server-side flags. */
+  | 'pilot_reporting';
 
 export type PersonaRole =
   | 'mobility_analyst'
@@ -97,6 +99,166 @@ export interface StudyAreaMeta {
   dataset_count?: number;
 }
 
+export interface BasemapConfig {
+  enabled: boolean;
+  tile_url: string;
+  name: string;
+  provider: string;
+  policy_url: string;
+  attribution: string;
+  optional: boolean;
+  fallback: string;
+  bulk_download: string;
+}
+
+export interface DatasetProvenance {
+  network_source?: string;
+  network_generator?: string;
+  generator_seed?: number;
+  is_synthetic_geometry?: boolean;
+  canonical_crs?: string;
+  extract_version?: string;
+  checksum_sha256?: string;
+  license?: string;
+  source_attribution?: string;
+  snapshot_date?: string;
+  lixel_resolution_m?: number;
+  ambiguous_crossing_count?: number;
+  [key: string]: unknown;
+}
+
+export interface IncidentProvenance {
+  incident_provenance?: string;
+  scenario_key?: string;
+  random_seed?: number;
+  parameters?: Record<string, number | string>;
+  notice_en?: string;
+  notice_fa?: string;
+  [key: string]: unknown;
+}
+
+/** Presentation contract shared with the backend (frontend-experience-improvements task 1.3). */
+export interface PresentationContract {
+  dataset_id: number | null;
+  dataset_name: string;
+  dataset_profile: string;
+  synthetic_incidents: boolean | null;
+  study_area_key: string;
+  study_area_label_en: string;
+  study_area_label_fa: string;
+  network_source: string;
+  network_extract_version: string;
+  network_checksum_sha256: string;
+  license: string;
+  attribution: string;
+  legend_note: string;
+  required_visible_elements: string[];
+  screenshot_guidance: string;
+  center_4326: [number, number];
+  network_bbox_4326: GeoBounds | null;
+  canonical_crs: string;
+  filters_persisted: boolean;
+}
+
+export interface PilotFeatureFlag {
+  key: string;
+  enabled: boolean;
+  owner: string;
+  approval_reference: string;
+  updated_at_utc: string;
+}
+
+export interface PilotDatasetState {
+  dataset_id: number | null;
+  profile_key: string;
+  purpose: string;
+  allows_real_reports: boolean;
+  allows_publication: boolean;
+  is_synthetic: boolean;
+  calibration_status: string;
+  is_publishable: boolean;
+  user_disclosure_approved: boolean;
+  study_area_key: string;
+  archived_at_utc: string | null;
+}
+
+export interface PilotStatus {
+  process_profile: string;
+  process_profile_database: string;
+  dataset: PilotDatasetState | null;
+  flags: Record<string, PilotFeatureFlag>;
+  consent_version?: string;
+  pilot_configuration: Record<string, unknown> | null;
+  release_gates: {
+    owner_and_hosting_approved: boolean;
+    legal_privacy_review_recorded: boolean;
+    identity_model_recorded: boolean;
+    intake_enabled: boolean;
+    publication_enabled: boolean;
+    /** Present only on deployments that expose separate tracking/correction gates. */
+    tracking_enabled?: boolean;
+    corrections_enabled?: boolean;
+  };
+  note: string;
+}
+
+export interface PilotBootstrap {
+  dataset_id: number | null;
+  intake_enabled: boolean;
+  tracking_enabled: boolean;
+  publication: { enabled: boolean; status: string; minimum_cell_size: number | null };
+  study_area: Record<string, unknown> | null;
+  categories: CategoryMeta[];
+  severities: SeverityMeta[];
+  network_extract: Record<string, unknown> | null;
+  consent_version: string;
+  privacy: Record<string, string>;
+  timezone: string;
+}
+
+/**
+ * Intake receipt, matching `POST /pilot/reports` exactly.
+ *
+ * There are **no** `duplicate_suggestions` (plural), `consolidated`, `status` or `status_label`
+ * fields: the endpoint returns a single `duplicate_suggestion`, `unmatched` and
+ * `verification_status`. Reading a field that is not sent would silently render `undefined`.
+ */
+export interface PilotReportReceipt {
+  report_public_id: string;
+  dataset_id: number;
+  tracking_credential: string;
+  tracking_credential_note: string;
+  occurred_at_utc: string;
+  occurred_at_local_input: string;
+  timezone: string;
+  verification_status: string;
+  snap_confidence: 'confident' | 'uncertain' | 'unmatched';
+  unmatched: boolean;
+  coarse_location: { lon: number; lat: number; cell_key: string };
+  duplicate_suggestion: { accident_id: number; distance_m: number; occurred_at_utc: string; action: string } | null;
+  uncertainty_radius_m: number;
+  candidate_count: number;
+  retention_until_utc: string;
+  consent_version: string;
+  synthetic: boolean;
+  idempotent_replay?: boolean;
+}
+
+export interface PilotTracking {
+  report_public_id: string;
+  status: string;
+  status_label: string;
+  status_label_fa: string;
+  occurred_at_utc: string;
+  coarse_cell_key: string | null;
+  merged_into: string | null;
+  retention_until_utc: string | null;
+  can_request_correction: boolean;
+  can_withdraw_consent: boolean;
+  publication_note: string;
+  note: string;
+}
+
 export interface GeoBounds {
   min_lon: number;
   min_lat: number;
@@ -124,6 +286,28 @@ export interface PlatformMeta {
   personas: PersonaUser[];
   scenarios: ScenarioSpec[];
   context_geojson: GeoJSON.FeatureCollection;
+  // --- Presentation contract ---------------------------------------------------------------
+  dataset_profile?: string;
+  dataset_profile_purpose?: string;
+  allows_real_reports?: boolean;
+  allows_publication?: boolean;
+  calibration_status?: 'uncalibrated' | 'research_only' | 'approved' | string;
+  network_provenance?: DatasetProvenance;
+  incident_provenance?: IncidentProvenance;
+  active_extract?: Record<string, unknown> | null;
+  is_synthetic_incidents?: boolean | null;
+  basemap?: BasemapConfig;
+  tile_provider?: BasemapConfig;
+  attribution?: string;
+  disclaimer_en?: string;
+  disclaimer_fa?: string;
+  presentation?: PresentationContract;
+  profile_independence?: {
+    isolated_profiles: string[];
+    profile_database_overrides: string;
+    note: string;
+  };
+  study_area_metadata?: Record<string, unknown> | null;
 }
 
 export interface NetworkLayersPayload {

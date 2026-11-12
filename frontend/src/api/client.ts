@@ -3,6 +3,10 @@ import type {
   CmvStatePayload,
   ConflationAlert,
   NetworkLayersPayload,
+  PilotBootstrap,
+  PilotReportReceipt,
+  PilotStatus,
+  PilotTracking,
   PlatformMeta,
   RiskEbPayload,
   SnapCandidate,
@@ -297,4 +301,94 @@ export const uaiApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  // --- Restricted pilot (disabled by default; every call is refused server-side until the
+  // corresponding feature flag is enabled by an owner with a recorded approval reference) -----
+  getPilotStatus: () => apiJson<PilotStatus>('/api/v1/pilot/status'),
+
+  getPilotBootstrap: () => apiJson<PilotBootstrap>('/api/v1/pilot/bootstrap'),
+
+  submitPilotReport: (payload: Record<string, unknown>, idempotencyKey: string) =>
+    apiJson<PilotReportReceipt>('/api/v1/pilot/reports', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(payload),
+    }),
+
+  trackPilotReport: (datasetId: number, credential: string) =>
+    apiJson<PilotTracking>('/api/v1/pilot/tracking', {
+      method: 'POST',
+      body: JSON.stringify({ dataset_id: datasetId, credential }),
+    }),
+
+  /** `reportId` accepts the public id (`RS-000042`) or the numeric id. */
+  withdrawPilotConsent: (
+    reportId: string | number,
+    datasetId: number,
+    credential: string,
+    reason: string
+  ) =>
+    apiJson<Record<string, unknown>>(`/api/v1/pilot/reports/${reportId}/withdraw-consent`, {
+      method: 'POST',
+      body: JSON.stringify({ dataset_id: datasetId, credential, reason }),
+    }),
+
+  getPilotConfiguration: (datasetId: number) =>
+    apiJson<Record<string, any>>(`/api/v1/pilot/configuration?dataset_id=${datasetId}`),
+
+  getPilotAggregates: (datasetId: number) =>
+    apiJson<{
+      enabled: boolean;
+      status: string;
+      aggregates: Record<string, any>[];
+      minimum_cell_size: number;
+      disclosure_policy_reference: string;
+      note: string;
+    }>(`/api/v1/pilot/aggregates?dataset_id=${datasetId}`),
+
+  pilotModerate: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/pilot/moderation', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  pilotCorrect: (payload: Record<string, unknown>) =>
+    apiJson<Record<string, any>>('/api/v1/pilot/corrections', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  rebuildPublicAggregates: (datasetId: number, policyReference: string) =>
+    apiJson<Record<string, any>>('/api/v1/pilot/publication/rebuild', {
+      method: 'POST',
+      body: JSON.stringify({ dataset_id: datasetId, disclosure_policy_reference: policyReference }),
+    }),
+
+  applyPilotRetention: (datasetId: number) =>
+    apiJson<Record<string, any>>('/api/v1/pilot/retention/apply', {
+      method: 'POST',
+      body: JSON.stringify({ dataset_id: datasetId }),
+    }),
+
+  setPilotFlag: (payload: {
+    key: string;
+    enabled: boolean;
+    owner: string;
+    approval_reference: string;
+    dataset_id?: number;
+  }) =>
+    apiJson<Record<string, any>>('/api/v1/pilot/flags', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  getNetworkExtracts: (datasetId: number) =>
+    apiJson<{ extracts: Record<string, any>[]; count: number }>(
+      `/api/v1/ingest/network/extracts?dataset_id=${datasetId}`
+    ),
+
+  getIngestBoundary: (studyAreaKey?: string) =>
+    apiJson<Record<string, any>>(
+      `/api/v1/ingest/boundary${studyAreaKey ? `?study_area_key=${studyAreaKey}` : ''}`
+    ),
 };

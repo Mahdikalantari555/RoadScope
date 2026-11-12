@@ -84,7 +84,7 @@ const days: Record<Language, readonly string[]> = {
   fa: ['دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه', 'یکشنبه'],
 };
 
-const labels: Record<string, string> = {
+const faLabels: Record<string, string> = {
   PDO: 'فقط خسارت مالی',
   MINOR_INJURY: 'جراحت جزئی',
   SERIOUS_INJURY: 'جراحت شدید',
@@ -104,8 +104,34 @@ export function analyticsText(language: Language) {
 export function dayLabels(language: Language) {
   return days[language];
 }
+const enLabels: Record<string, string> = {
+  PDO: 'Property damage only',
+  MINOR_INJURY: 'Minor injury',
+  SERIOUS_INJURY: 'Serious injury',
+  FATAL: 'Fatality',
+  REAR_END: 'Rear-end collision',
+  ANGLE_INTERSECTION: 'Angle collision at intersection',
+  PEDESTRIAN_CROSSING: 'Pedestrian crossing collision',
+  CYCLIST_CONFLICT: 'Cyclist conflict',
+  SIDESWIPE: 'Sideswipe collision',
+  RUN_OFF_ROAD: 'Run off road',
+  MULTI_VEHICLE_PILEUP: 'Multi-vehicle pile-up',
+};
+
+/**
+ * Human-readable label for an enumerated domain code.
+ *
+ * Falls back to the server-provided label and finally to the raw code, so a taxonomy value added
+ * on the backend is still displayed (as a code) instead of disappearing.
+ */
 export function domainLabel(language: Language, code: string, fallback: string) {
-  return language === 'fa' ? labels[code] ?? fallback : fallback;
+  return language === 'fa' ? faLabels[code] ?? fallback : fallback;
+}
+
+/** Same as {@link domainLabel} but with English words for the built-in taxonomy codes. */
+export function taxonomyLabel(language: Language, code: string, fallback: string) {
+  if (language === 'fa') return faLabels[code] ?? fallback;
+  return enLabels[code] ?? (fallback && fallback !== code ? fallback : code);
 }
 export function formatNumber(language: Language, value: number) {
   return new Intl.NumberFormat(language === 'fa' ? 'fa-IR' : 'en-US', {

@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  BasemapConfig,
   MapInteractionTool,
   MapOverlayMode,
   NetworkLayersPayload,
@@ -21,6 +22,7 @@ import { BIVARIATE_3X3, wgs84ToMetric } from '../utils/colors';
 import { escapeHtml, safeHexColor } from '../utils/html';
 import { useLanguage } from '../i18n';
 import { getMapChartsText } from '../workspaceI18n';
+import { OfflineMapFallback } from './OfflineMapFallback';
 
 interface VgiDraftMapOverlay {
   rawLon: number;
@@ -50,6 +52,11 @@ interface MapCanvasProps {
   onChangeTool: (tool: MapInteractionTool) => void;
   selectedSegmentId: number | null;
   onSelectSegment: (segmentId: number | null) => void;
+  /**
+   * Select an incident feature for the accessible detail panel. The MapLibre popup remains as a
+   * quick hover-free preview, but the accessible, keyboard-reachable surface is the panel.
+   */
+  onSelectIncident?: (properties: Record<string, unknown> | null) => void;
   activeBbox: [number, number, number, number] | null;
   onSelectBbox: (bbox: [number, number, number, number] | null) => void;
   activePolygon: [number, number][] | null;
@@ -57,6 +64,12 @@ interface MapCanvasProps {
   onMapVgiClick: (lon: number, lat: number) => void;
   vgiDraftOverlay: VgiDraftMapOverlay | null;
   flyToTarget: { lon: number; lat: number; zoom?: number; ts: number } | null;
+  /**
+   * Basemap policy from the API. The tile service is optional and explicitly *not* an SLA: when
+   * it is disabled or unreachable the map must fall back to the offline vector layers with a
+   * visible warning rather than showing an empty grey canvas.
+   */
+  basemap?: BasemapConfig | null;
   /** Map framing comes from the API so no city is hard-coded in the client. */
   center4326?: [number, number] | null;
   networkBbox4326?: { min_lon: number; min_lat: number; max_lon: number; max_lat: number } | null;
@@ -104,6 +117,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   onChangeTool,
   selectedSegmentId,
   onSelectSegment,
+  onSelectIncident,
   activeBbox,
   onSelectBbox,
   activePolygon,
@@ -114,16 +128,26 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   center4326,
   networkBbox4326,
   canonicalEpsg,
+  basemap,
 }) => {
   const { language, t } = useLanguage();
   const mapCopy = getMapChartsText(language);
+  const popupDir = language === 'fa' ? 'rtl' : 'ltr';
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
 
   const [mapLoaded, setMapLoaded] = useState(false);
   const [webglError, setWebglError] = useState<string | null>(null);
-  const [showBasemap, setShowBasemap] = useState(true);
+  // The basemap is opt-in when the server publishes a policy (`enabled`), otherwise the historic
+  // default of "on when a tile URL exists" is retained.
+  const basemapEnabled = basemap ? Boolean(basemap.enabled) : true;
+  const basemapTiles = basemap?.tile_url || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  const basemapAttribution =
+    basemap?.attribution ||
+    '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>';
+  const [showBasemap, setShowBasemap] = useState(basemapEnabled);
+  const [basemapFailed, setBasemapFailed] = useState(false);
   const [segmentSearch, setSegmentSearch] = useState('');
   const [showGraticule, setShowGraticule] = useState(true);
   const [showNodes, setShowNodes] = useState(false);
@@ -186,6 +210,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   onMapVgiClickRef.current = onMapVgiClick;
   const onSelectSegmentRef = useRef(onSelectSegment);
   onSelectSegmentRef.current = onSelectSegment;
+  const onSelectIncidentRef = useRef(onSelectIncident);
+  onSelectIncidentRef.current = onSelectIncident;
 
   // Initialize MapLibre GL JS with self-contained vector cartography
   useEffect(() => {
@@ -199,10 +225,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           sources: {
             'osm-basemap': {
               type: 'raster',
-              tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+              tiles: [basemapTiles],
               tileSize: 256,
               maxzoom: 19,
-              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>',
+              // Attribution comes from the server policy so it matches the configured provider.
+              attribution: basemapAttribution,
             },
           },
           layers: [
@@ -221,6 +248,16 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         minZoom: 3,
         maxZoom: 19,
         attributionControl: { compact: false },
+      });
+
+      // A tile service is not an SLA. Record failures so the UI can say so and keep the offline
+      // vector cartography readable instead of leaving a blank basemap.
+      map.on('error', (event) => {
+        const detail = event as unknown as { error?: { message?: string }; sourceId?: string };
+        const message = String(detail.error?.message ?? '');
+        if (/tile|openstreetmap|\.png/i.test(message) || detail.sourceId === 'osm-basemap') {
+          setBasemapFailed(true);
+        }
       });
 
       map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
@@ -714,6 +751,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           const incFeats = map.queryRenderedFeatures(e.point, { layers: ['incidents-unclustered'] });
           if (incFeats.length > 0) {
             const p = incFeats[0].properties || {};
+            onSelectIncidentRef.current?.({ ...p });
             const html = `
               <div style="background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;padding:10px 12px;font-size:11px;min-width:235px;font-family:Inter,sans-serif;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
@@ -721,13 +759,13 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                   <span style="font-family:monospace;font-size:10px;color:#94a3b8;">#${escapeHtml(p.id)} · ${escapeHtml(p.verification_status)}</span>
                 </div>
                 <div style="font-weight:600;margin-bottom:4px;">${escapeHtml(p.category_label || p.category_code)}</div>
-                <div style="color:#cbd5e1;margin-bottom:6px;">Corridor: <b>${escapeHtml(p.segment_name || 'N/A')}</b> (LRS m=${escapeHtml(p.linear_offset_m)}m)</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-family:monospace;font-size:10px;color:#94a3b8;border-top:1px solid #1e293b;padding-top:6px;">
-                  <div>EPDO: <b style="color:#f8fafc">${escapeHtml(p.epdo_weight)}</b></div>
-                  <div>Credibility: <b style="color:#10b981">${escapeHtml(p.vgi_credibility_score)}</b></div>
-                  <div>Snap d⊥: <b>${escapeHtml(p.orthogonal_snap_dist_m)}m</b></div>
-                  <div>Witnesses: <b>${escapeHtml(p.witness_count)}</b></div>
-                  <div style="grid-column:span 2;">UTC: ${escapeHtml(p.occurred_at_utc)}</div>
+                <div style="color:#cbd5e1;margin-bottom:6px;" dir="${popupDir}">${escapeHtml(mapCopy.popupCorridor)}: <b>${escapeHtml(p.segment_name || escapeHtml(mapCopy.popupNoValue))}</b> (LRS m=${escapeHtml(p.linear_offset_m ?? escapeHtml(mapCopy.popupNoValue))})</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-family:monospace;font-size:10px;color:#94a3b8;border-top:1px solid #1e293b;padding-top:6px;" dir="${popupDir}">
+                  <div>${escapeHtml(mapCopy.popupEpdo)}: <b style="color:#f8fafc">${escapeHtml(p.epdo_weight ?? escapeHtml(mapCopy.popupNoValue))}</b></div>
+                  <div>${escapeHtml(mapCopy.popupCredibility)}: <b style="color:#10b981">${escapeHtml(p.vgi_credibility_score ?? escapeHtml(mapCopy.popupNoValue))}</b></div>
+                  <div>${escapeHtml(mapCopy.popupSnapDistance)}: <b>${escapeHtml(p.orthogonal_snap_dist_m ?? escapeHtml(mapCopy.popupNoValue))}</b></div>
+                  <div>${escapeHtml(mapCopy.popupWitnesses)}: <b>${escapeHtml(p.witness_count ?? escapeHtml(mapCopy.popupNoValue))}</b></div>
+                  <div style="grid-column:span 2;">${escapeHtml(mapCopy.popupUtc)}: ${escapeHtml(p.occurred_at_utc ?? escapeHtml(mapCopy.popupNoValue))}</div>
                 </div>
               </div>
             `;
@@ -763,12 +801,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               const html = `
                 <div style="background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:6px;padding:10px 12px;font-size:11px;min-width:230px;">
                   <div style="font-weight:700;color:#22d3ee;margin-bottom:2px;">${escapeHtml(rp.name || rp.segment_name || `Segment #${sid}`)}</div>
-                  <div style="font-family:monospace;font-size:10px;color:#94a3b8;margin-bottom:6px;">
-                    Class: ${escapeHtml(rp.road_class)} · Elev: L${escapeHtml(rp.elevation_level ?? 0)} · Len: ${escapeHtml(rp.length_m)}m
+                  <div style="font-family:monospace;font-size:10px;color:#94a3b8;margin-bottom:6px;" dir="${popupDir}">
+                    ${escapeHtml(rp.road_class ?? mapCopy.popupNoValue)} · Elev: L${escapeHtml(rp.elevation_level ?? 0)} · ${escapeHtml(mapCopy.popupLength)}: ${escapeHtml(rp.length_m ?? mapCopy.popupNoValue)} m
                   </div>
-                  <div style="font-family:monospace;font-size:10px;color:#cbd5e1;display:grid;gap:3px;">
+                  <div style="font-family:monospace;font-size:10px;color:#cbd5e1;display:grid;gap:3px;" dir="${popupDir}">
                     ${extraMetric}
-                    <div style="color:#64748b;margin-top:3px;">Clicked segment cross-filtered in CMV panels.</div>
+                    <div style="color:#64748b;margin-top:3px;">${escapeHtml(mapCopy.popupCrossFilterNote)}</div>
                   </div>
                 </div>
               `;
@@ -1080,8 +1118,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-    map.setLayoutProperty('osm-basemap-layer', 'visibility', showBasemap ? 'visible' : 'none');
-  }, [showBasemap, mapLoaded]);
+    map.setLayoutProperty(
+      'osm-basemap-layer',
+      'visibility',
+      showBasemap && basemapEnabled && !basemapFailed ? 'visible' : 'none'
+    );
+  }, [showBasemap, basemapEnabled, basemapFailed, mapLoaded]);
 
   // Enable/Disable Map Pan during Box Select Drag
   useEffect(() => {
@@ -1176,14 +1218,18 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         }`}
       />
 
-      {/* Fallback SVG Vector Canvas if WebGL context unavailable */}
+      {/* Fallback vector canvas if the WebGL context is unavailable. It draws the same GeoJSON as
+          plain SVG so the map is still usable, instead of showing only an error. */}
       {webglError && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-300 p-6 text-center">
-          <p className="text-sm font-mono text-amber-400 mb-2">
-            {t('noWebgl')} ({webglError})
-          </p>
-          <p className="text-xs text-slate-400 max-w-md">{mapCopy.fallbackSubtitle}</p>
-        </div>
+        <OfflineMapFallback
+          network={networkLayers}
+          incidents={incidentsGeojson}
+          center4326={center4326 ?? null}
+          networkBbox4326={networkBbox4326 ?? null}
+          darkMode={darkMode}
+          reason={webglError}
+          isSynthetic={isSynthetic}
+        />
       )}
 
       {/* Dragging Box Selection Rectangle */}
@@ -1232,18 +1278,50 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             ))}
           </select>
 
-          <label className="flex items-center gap-2 mt-2 text-xs cursor-pointer">
-            <input type="checkbox" checked={showBasemap} onChange={(e) => setShowBasemap(e.target.checked)} />
-            {language === 'fa' ? 'نقشهٔ پایه OpenStreetMap' : 'OpenStreetMap basemap'}
+          <label className={`flex items-center gap-2 mt-2 text-xs ${basemapEnabled ? 'cursor-pointer' : 'opacity-60'}`}>
+            <input
+              type="checkbox"
+              checked={showBasemap && basemapEnabled && !basemapFailed}
+              disabled={!basemapEnabled || basemapFailed}
+              onChange={(e) => setShowBasemap(e.target.checked)}
+            />
+            {basemap?.name || (language === 'fa' ? 'نقشهٔ پایه OpenStreetMap' : 'OpenStreetMap basemap')}
           </label>
-          {showBasemap && (
-            <p className="mt-1 text-[10px] opacity-75" role="note">
+          <p className="mt-1 text-[10px] opacity-75" role="note" data-testid="basemap-note">
+            {basemapFailed
+              ? language === 'fa'
+                ? 'کاشی‌های نقشهٔ پایه در دسترس نیستند؛ لایه‌های برداری آفلاین نمایش داده می‌شوند.'
+                : 'Basemap tiles are unavailable; showing the offline vector layers.'
+              : !basemapEnabled
+                ? language === 'fa'
+                  ? 'نقشهٔ پایه توسط تنظیمات سرور غیرفعال شده است؛ فقط لایه‌های برداری آفلاین نمایش داده می‌شوند.'
+                  : 'The basemap is disabled by server configuration; only the offline vector layers are shown.'
+                : showBasemap
+                  ? language === 'fa'
+                    ? 'نقشهٔ پایهٔ اختیاری: درخواست کاشی‌ها به ارائه‌دهندهٔ خارجی ارسال می‌شود. قطع سرویس آن، لایه‌های تحلیلی را متوقف نمی‌کند.'
+                    : 'Optional basemap: tile requests go to a third-party provider. Its availability is not guaranteed and does not affect the analytical layers.'
+                  : language === 'fa'
+                    ? 'نقشهٔ پایه خاموش است؛ فقط لایه‌های برداری آفلاین نمایش داده می‌شوند.'
+                    : 'Basemap off; only the offline vector layers are shown.'}
+          </p>
+          {showBasemap && basemapEnabled && !basemapFailed && (
+            <p className="mt-1 text-[10px] opacity-75" role="note" data-testid="basemap-attribution">
+              {language === 'fa' ? 'انتساب ارائه‌دهنده' : 'Provider attribution'}: <bdi>{basemap?.provider || 'OpenStreetMap'}</bdi>
+              {basemap?.policy_url && (
+                <>
+                  {' · '}
+                  <a className="underline" href={basemap.policy_url} target="_blank" rel="noopener noreferrer">
+                    {language === 'fa' ? 'سیاست ارائه‌دهنده' : 'provider policy'}
+                  </a>
+                </>
+              )}
+            </p>
+          )}
+          {showBasemap && basemapEnabled && !basemapFailed && isSynthetic && (
+            <p className="mt-1 text-[10px] text-amber-300" role="note">
               {language === 'fa'
-                ? 'نقشهٔ پایه آنلاین است و درخواست کاشی‌ها به OpenStreetMap ارسال می‌شود.'
-                : 'Online basemap: tile requests are sent to OpenStreetMap.'}
-              {isSynthetic && (language === 'fa'
-                ? ' شبکه و رخدادهای مصنوعی ممکن است با خیابان‌های واقعی منطبق نباشند.'
-                : ' Synthetic roads and incidents may not align with real streets.')}
+                ? 'شبکهٔ مصنوعی و رخدادها ممکن است با خیابان‌های واقعی منطبق نباشند.'
+                : 'The synthetic network and incidents may not align with real streets.'}
             </p>
           )}
 
@@ -1330,6 +1408,34 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               <MapPin className="w-3 h-3" /> {mapCopy.toolPin}
             </button>
           </div>
+
+          {/* Keyboard-accessible incident selection: the map is not focusable, so the detail
+              panel must be reachable without a pointer. */}
+          {onSelectIncident && (incidentsGeojson?.features.length ?? 0) > 0 && (
+            <div className="flex items-center gap-1 mt-1.5 text-[10px] font-mono">
+              <label className="flex-1" htmlFor="incident-picker">
+                {mapCopy.incidentPickerLabel}
+              </label>
+              <select
+                id="incident-picker"
+                className={`px-1 py-0.5 rounded border ${darkMode ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-900'}`}
+                value=""
+                onChange={(event) => {
+                  const feature = (incidentsGeojson?.features ?? []).find(
+                    (item) => String(item.properties?.id) === event.target.value
+                  );
+                  onSelectIncident(feature ? { ...(feature.properties as Record<string, unknown>) } : null);
+                }}
+              >
+                <option value="">{mapCopy.incidentPickerPlaceholder}</option>
+                {(incidentsGeojson?.features ?? []).slice(0, 100).map((feature) => (
+                  <option key={String(feature.properties?.id)} value={String(feature.properties?.id)}>
+                    #{String(feature.properties?.id)} · {String(feature.properties?.category_label ?? feature.properties?.category_code ?? '')}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Toggles: Graticule, Nodes, VGI Displacement, Reset */}
           <div className="flex items-center justify-between gap-1 mt-1.5 text-[10px] font-mono opacity-85">

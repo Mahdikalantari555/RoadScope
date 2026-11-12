@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Activity,
+  ClipboardCheck,
   Compass,
   Database,
   FlaskConical,
@@ -39,6 +40,9 @@ const WORKSPACE_TABS: { mode: WorkspaceMode; short: MessageKey; icon: React.Reac
   { mode: 'citizen_vgi', short: 'citizenDetail', icon: <MapPinPlus className="w-3.5 h-3.5" /> },
   { mode: 'stewardship', short: 'stewardDetail', icon: <ShieldCheck className="w-3.5 h-3.5" /> },
   { mode: 'simulator', short: 'simulatorDetail', icon: <Sparkles className="w-3.5 h-3.5" /> },
+  // The pilot tab is always visible so a user can *find out* that real reporting is closed,
+  // instead of the capability silently not existing.
+  { mode: 'pilot_reporting', short: 'pilotDetail', icon: <ClipboardCheck className="w-3.5 h-3.5" /> },
 ];
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({

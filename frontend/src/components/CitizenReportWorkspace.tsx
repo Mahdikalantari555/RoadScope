@@ -52,7 +52,10 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
   const [lon, setLon] = useState<number>(suggestedPreset4326?.[0] ?? 0);
   const [lat, setLat] = useState<number>(suggestedPreset4326?.[1] ?? 0);
   const [obsRadiusM, setObsRadiusM] = useState<number>(20);
-  const [occurredUtc, setOccurredUtc] = useState<string>('2026-11-08T17:30:00Z');
+  // Defaults are *empty on purpose*. A prefilled timestamp or narrative would be submitted as if
+  // the reporter had observed it, which is fabrication. "Now" is offered as an explicit button.
+  const [occurredUtc, setOccurredUtc] = useState<string>('');
+  const [nowIso, setNowIso] = useState<string>('');
   const [categoryCode, setCategoryCode] = useState<string>('PEDESTRIAN_CROSSING');
   const [severityCode, setSeverityCode] = useState<string>('MINOR_INJURY');
   const [vehicles, setVehicles] = useState<number>(1);
@@ -62,9 +65,7 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
   const [weather, setWeather] = useState<'clear' | 'rain' | 'heavy_rain' | 'fog' | 'snow_ice'>('rain');
   const [surface, setSurface] = useState<'dry' | 'wet' | 'standing_water' | 'icy'>('wet');
   const [lighting, setLighting] = useState<'daylight' | 'twilight' | 'night_lit' | 'night_unlit'>('twilight');
-  const [narrative, setNarrative] = useState<string>(
-    'Observed conflict near crosswalk; reporting approximate position from sidewalk.'
-  );
+  const [narrative, setNarrative] = useState<string>('');
 
   const [candidates, setCandidates] = useState<SnapCandidate[]>([]);
   const [selectedSegId, setSelectedSegId] = useState<number | null>(null);
@@ -90,6 +91,13 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
 
   useEffect(() => {
     let cancelled = false;
+    // Without an occurrence time the server has nothing to compare against; skip the preview
+    // instead of sending an empty timestamp and surfacing a spurious error.
+    if (!occurredUtc.trim()) {
+      setCandidates([]);
+      setConflationAlerts([]);
+      return;
+    }
     const timer = setTimeout(async () => {
       try {
         const res = await uaiApi.previewSnapAndConflate({
@@ -149,6 +157,12 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
 
   const handleSubmitNew = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Guard the semantic requirement even though the button is disabled: an empty occurrence time
+    // would otherwise be stored as "now" by the server and silently misrepresent the observation.
+    if (!occurredUtc.trim()) {
+      setFeedback({ type: 'err', msg: copy.timestampRequired });
+      return;
+    }
     setSubmitting(true);
     setFeedback(null);
     try {
@@ -438,14 +452,43 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="block text-[10px] opacity-70 mb-0.5">{copy.timestampLabel}</label>
+            <label className="block text-[10px] opacity-70 mb-0.5" htmlFor="vgi-occurred-at">
+              {copy.timestampLabel}
+            </label>
             <input
+              id="vgi-occurred-at"
               dir="ltr"
-              type="text"
-              value={occurredUtc}
-              onChange={(e) => setOccurredUtc(e.target.value)}
+              type="datetime-local"
+              value={nowIso}
+              onChange={(e) => {
+                setNowIso(e.target.value);
+                // The browser reports wall-clock local time; the API stores UTC.
+                const parsed = e.target.value ? new Date(e.target.value) : null;
+                setOccurredUtc(parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString().replace(/\.\d{3}Z$/, 'Z') : '');
+              }}
               className={inputCls}
+              required
+              aria-describedby="vgi-occurred-hint"
             />
+            <div className="mt-0.5 flex items-center justify-between gap-1">
+              <button
+                type="button"
+                className="underline text-[10px] opacity-80"
+                onClick={() => {
+                  const now = new Date();
+                  setNowIso(new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16));
+                  setOccurredUtc(now.toISOString().replace(/\.\d{3}Z$/, 'Z'));
+                }}
+              >
+                {copy.timestampNow}
+              </button>
+              <bdi dir="ltr" className="text-[10px] opacity-60">
+                {occurredUtc || copy.timestampRequired}
+              </bdi>
+            </div>
+            <p id="vgi-occurred-hint" className="text-[10px] opacity-60">
+              {copy.timestampHint}
+            </p>
           </div>
           <div>
             <label className="block text-[10px] opacity-70 mb-0.5">{copy.envLabel}</label>
@@ -531,25 +574,30 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
         </div>
 
         <div>
-          <label className="block text-[10px] opacity-70 mb-0.5">{copy.narrativeLabel}</label>
+          <label className="block text-[10px] opacity-70 mb-0.5" htmlFor="vgi-narrative">
+            {copy.narrativeLabel}
+          </label>
           <textarea
+            id="vgi-narrative"
             rows={2}
             dir="auto"
             value={narrative}
+            placeholder={copy.narrativePlaceholder}
             onChange={(e) => setNarrative(e.target.value)}
             className="w-full px-2 py-1 rounded border border-slate-700 bg-slate-950 text-[11px]"
+            aria-describedby="vgi-narrative-note"
           />
-          <p className="mt-1 text-[10px] opacity-70">
-            {language === 'fa' ? 'در این نسخه بارگذاری عکس پشتیبانی نمی‌شود.' : 'Photo uploads are not supported in this version.'}
+          <p id="vgi-narrative-note" className="mt-1 text-[10px] opacity-70">
+            {copy.photoNote}
           </p>
         </div>
 
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || !occurredUtc.trim()}
           className="w-full py-1.5 rounded bg-rose-500 hover:bg-rose-400 text-white font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50"
         >
-          <Send className="w-3.5 h-3.5" />
+          <Send className="w-3.5 h-3.5" aria-hidden="true" />
           {copy.submitBtn}
         </button>
       </form>

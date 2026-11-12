@@ -47,6 +47,59 @@ def db_session(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def load_feature_flag(conn: sqlite3.Connection, key: str) -> dict[str, Any]:
+    """Read a database feature flag. A missing row is treated as disabled (fail closed)."""
+    row = conn.execute(
+        "SELECT key, enabled, owner, approval_reference, updated_at_utc, notes FROM feature_flags WHERE key = ?",
+        (key,),
+    ).fetchone()
+    if not row:
+        return {"key": key, "enabled": False, "owner": "", "approval_reference": "", "notes": ""}
+    return {
+        "key": str(row["key"]),
+        "enabled": bool(row["enabled"]),
+        "owner": str(row["owner"]),
+        "approval_reference": str(row["approval_reference"]),
+        "updated_at_utc": str(row["updated_at_utc"]),
+        "notes": str(row["notes"]),
+    }
+
+
+def feature_enabled(conn: sqlite3.Connection, key: str) -> bool:
+    return bool(load_feature_flag(conn, key)["enabled"])
+
+
+def dataset_profile(conn: sqlite3.Connection, dataset_id: int | None) -> dict[str, Any]:
+    """Profile + provenance for a dataset (never inferred from a process-global setting)."""
+    if dataset_id is None:
+        row = conn.execute(
+            "SELECT * FROM dataset_sources WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM dataset_sources WHERE id = ?", (int(dataset_id),)).fetchone()
+    if not row:
+        return {"dataset_id": None, "profile_key": "", "is_synthetic": None, "purpose": ""}
+    keys = row.keys()
+    profile = str(row["profile_key"]) if "profile_key" in keys else "demo"
+    purpose_row = conn.execute(
+        "SELECT purpose, allows_real_reports, allows_publication FROM dataset_profiles WHERE profile_key = ?",
+        (profile,),
+    ).fetchone()
+    return {
+        "dataset_id": int(row["id"]),
+        "profile_key": profile,
+        "purpose": str(purpose_row["purpose"]) if purpose_row else "",
+        "allows_real_reports": bool(purpose_row["allows_real_reports"]) if purpose_row else False,
+        "allows_publication": bool(purpose_row["allows_publication"]) if purpose_row else False,
+        "is_synthetic": bool(row["is_synthetic"]),
+        "calibration_status": str(row["calibration_status"]) if "calibration_status" in keys else "uncalibrated",
+        "is_publishable": bool(row["is_publishable"]) if "is_publishable" in keys else False,
+        "user_disclosure_approved": bool(row["user_disclosure_approved"]) if "user_disclosure_approved" in keys else False,
+        "study_area_key": str(row["study_area_key"]) if "study_area_key" in keys else "",
+        "archived_at_utc": row["archived_at_utc"] if "archived_at_utc" in keys else None,
+    }
+
+
 def init_schema_and_reference_data(db_path: Path | None = None) -> None:
     schema_sql = (MIGRATIONS_DIR / "002_spatialite_schema.sql").read_text(encoding="utf-8")
     with db_session(db_path) as conn:

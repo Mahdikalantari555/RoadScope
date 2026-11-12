@@ -861,11 +861,11 @@ def run_network_dbscan(
     for cid in range(cluster_id):
         member_idxs = [i for i, lb in enumerate(labels) if lb == cid]
         color = palette[cid % len(palette)]
-        pts_25832 = [(float(incidents[i]["snapped_x_m"]), float(incidents[i]["snapped_y_m"])) for i in member_idxs]
+        pts_metric = [(float(incidents[i]["snapped_x_m"]), float(incidents[i]["snapped_y_m"])) for i in member_idxs]
         epdo_total = sum(float(incidents[i]["epdo_weight"]) for i in member_idxs)
 
-        # Convex hull buffered by 18m in EPSG:25832 metric space
-        hull_25832 = MultiPoint(pts_25832).convex_hull.buffer(18.0, quad_segs=12)
+        # Convex hull buffered by 18 m in the dataset's own metric CRS (never a fixed UTM zone).
+        hull_metric = MultiPoint(pts_metric).convex_hull.buffer(18.0, quad_segs=12)
         features.append(
             {
                 "type": "Feature",
@@ -876,7 +876,7 @@ def run_network_dbscan(
                     "epdo_sum": round(epdo_total, 1),
                     "color": color,
                 },
-                "geometry": polygon_to_geojson_dict(hull_25832),
+                "geometry": polygon_to_geojson_dict(hull_metric, epsg),
             }
         )
 
