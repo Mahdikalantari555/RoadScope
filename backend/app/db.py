@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .config import MIGRATIONS_DIR, SQLITE_DB_PATH
+from .migrations import apply_migrations
 
 _SPATIALITE_LOADED_ONCE = False
 
@@ -50,6 +51,7 @@ def init_schema_and_reference_data(db_path: Path | None = None) -> None:
     schema_sql = (MIGRATIONS_DIR / "002_spatialite_schema.sql").read_text(encoding="utf-8")
     with db_session(db_path) as conn:
         conn.executescript(schema_sql)
+        apply_migrations(conn, MIGRATIONS_DIR)
         now = utc_now_iso()
 
         # Seed the 6 persona users

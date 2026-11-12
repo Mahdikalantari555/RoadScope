@@ -21,6 +21,17 @@ class SimulationRequest(BaseModel):
     actor_role: str = "simulation_scientist"
 
 
+class DirectedTransportRequest(BaseModel):
+    dataset_id: int | None = None
+    segment_id: int = Field(gt=0)
+    lixel_id: int = Field(gt=0)
+    direction: Literal[-1, 1]
+    mass: float = Field(default=1.0, ge=0.0, le=100000.0, allow_inf_nan=False)
+    speed_m_s: float = Field(default=5.0, gt=0.0, le=70.0, allow_inf_nan=False)
+    duration_s: float = Field(default=60.0, gt=0.0, le=3600.0, allow_inf_nan=False)
+    steps: int = Field(default=8, ge=1, le=64)
+
+
 class SnapConflatePreviewRequest(BaseModel):
     dataset_id: int | None = None
     lon: float | None = None

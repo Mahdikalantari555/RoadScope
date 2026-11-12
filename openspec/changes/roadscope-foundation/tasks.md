@@ -11,3 +11,7 @@
 - [ ] 1.7 Test unauthorized, forged-role, upgrade, rollback/recovery and clean-install cases; update operator documentation.
 
 Progress: CI, SQLite-only Compose, configuration aliases and an integrity-checked SQLite copy tool with backup/restore tests are in place. Container deployment validation, versioned migrations, operational recovery validation, and server-side authorization remain open.
+
+Further progress: numbered migrations now run transactionally with checksums and
+pre-upgrade SQLite copies. Legacy schema initialization and real deployment/restore
+validation still need attention; authorization remains unimplemented.

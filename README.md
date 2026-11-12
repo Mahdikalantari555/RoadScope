@@ -78,3 +78,33 @@ The risk workspace also provides a CURE diagnostic for the **existing** road-cla
 ### Language support status
 
 The language selector persists Persian/English, changes the document direction and localizes navigation, startup states, the coordinated analytics workspace and simulator controls. **Persian translation is incomplete**: the remaining workspaces, map controls, scientific diagnostics and some server-provided labels remain in English. The interface displays a notice until the remaining OpenSpec localization tasks are finished.
+
+### SQLite upgrades and experimental directed network
+
+On startup, numbered migrations from `migrations/003_*.sql` onward are applied
+as a transaction and recorded with SHA-256 checksums. Before a pending upgrade,
+the app creates an integrity-checked copy in a `backups/` directory next to
+the SQLite file. The app needs write permission there. Stop other writers and
+keep an independent backup before upgrading; copies are not pruned automatically.
+If an upgrade fails, stop the app and use `python -m app.backup BACKUP NEW_PATH`
+from `backend/` to restore to a new path, then set `ROADSCOPE_SQLITE_PATH` and
+restart. Backups can contain sensitive data; restrict access and retention. The
+legacy 002 baseline is still initialized separately; this is not yet a complete
+operational migration/rollback system.
+
+Migration 003 preserves existing roads, labels unknown legacy directions as
+**assumed bidirectional**, and stores dataset-scoped turn restrictions. New
+synthetic roads use the same assumption. `GET /api/v1/network/directed-topology`
+returns version and direction-quality metadata; `include_edges=true` includes
+states and legal transitions. `POST /api/v1/network/directed-transport` takes
+`segment_id`, `lixel_id`, `direction` (+1 or -1), optional `dataset_id`, `mass`,
+`speed_m_s`, `duration_s`, and `steps`. It is an experimental continuous-time
+Markov jump approximation solved with backward Euler. Each permitted transition
+has rate `speed / (outdegree × midpoint distance)`, so junction branching is
+inverse-distance weighted. Sinks retain mass. The response reports conservation,
+assumptions, topology version, and per-direction-state mass. Runtime is capped at
+4,000 states and 15,000 transitions; sparse factorization can still be expensive.
+This is neither a calibrated traffic model nor metric-graph heat diffusion, and
+is separate from the existing undirected NKDE. No user interface or validated
+scientific comparison is supplied yet. Current endpoints are **not secure for
+public deployment**; client-supplied roles are not authentication.

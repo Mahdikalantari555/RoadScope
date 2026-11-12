@@ -8,3 +8,10 @@
 - [ ] 1.4 Expose explicit method parameters and provenance without changing the legacy NKDE default.
 - [ ] 1.5 Test analytical line/Y cases, illegal turns, one-way, bridge, disconnected graphs, zero mass, conservation and nonnegativity at solver tolerances.
 - [ ] 1.6 Benchmark runtime/memory across graph sizes; document assumptions, numerical error and bilingual UI integration.
+
+Progress: SQLite direction and turn provenance, versioned lixel edge-state topology,
+read-only API, and an experimental conservative directed jump-transport operator
+are implemented. Analytical small-graph, illegal-turn, crossing and conservation
+tests exist. The operator is not metric-graph heat or a calibrated model;
+symmetric heat, formal scientific validation, benchmarking, secure mutation and
+bilingual UI are still open.

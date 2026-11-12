@@ -27,9 +27,11 @@ def get_network_layers_geojson(
         """
         SELECT s.id, s.edge_code, s.name, s.road_class, s.speed_limit_kmh, s.lanes,
                s.length_m, s.sinuosity, s.slope_pct, s.elevation_level, s.aadt, s.geojson_4326,
-               t.aadt_vehicles_per_day AS obs_aadt, t.is_imputed, t.coverage_confidence
+               t.aadt_vehicles_per_day AS obs_aadt, t.is_imputed, t.coverage_confidence,
+               d.direction AS oneway_direction, d.source AS direction_source
         FROM road_segments s
         LEFT JOIN traffic_observations t ON t.segment_id = s.id AND t.dataset_id = s.dataset_id
+        LEFT JOIN road_segment_directions d ON d.segment_id = s.id AND d.dataset_id = s.dataset_id
         WHERE s.dataset_id = ?
         ORDER BY s.elevation_level ASC, s.id ASC
         """,
@@ -50,6 +52,8 @@ def get_network_layers_geojson(
                 "sinuosity": round(float(r["sinuosity"]), 4),
                 "slope_pct": round(float(r["slope_pct"]), 2),
                 "elevation_level": int(r["elevation_level"]),
+                "oneway_direction": r["oneway_direction"],
+                "direction_source": r["direction_source"],
                 "aadt": int(r["obs_aadt"] or r["aadt"] or 8000),
                 "aadt_is_imputed": bool(r["is_imputed"]),
                 "coverage_confidence": round(float(r["coverage_confidence"] or 0.8), 3),
