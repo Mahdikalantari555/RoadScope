@@ -116,6 +116,9 @@ The basemap is **optional**, configured by the operator, and is not an SLA:
   credential, not by a report id.
 - **Rate limits are database-backed** (`rate_limit_windows`) so they hold across worker processes,
   not per process.
+- **Sign-in survives a reload.** The access token is held in `sessionStorage` (per tab, cleared on
+  sign-out) and sent only as an `Authorization` header. It is never placed in a URL. If `/meta`
+  answers 401, the boot screen offers the sign-in dialog directly instead of only a retry button.
 - **Restricted fields.** `/analytics/cmv` returns reporter narrative, raw coordinates, candidate
   lists and uncertainty radius **only** to a server-side steward. Everyone else receives the
   event-level fields with restricted keys absent.

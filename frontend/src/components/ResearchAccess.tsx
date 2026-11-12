@@ -2,12 +2,44 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useLocale } from '../i18n';
 import { setApiToken } from '../api/client';
 
-export function ResearchAccess() {
+/**
+ * Sign-in / capability dialog.
+ *
+ * `defaultOpen` lets the boot-error screen open it directly: when the server requires an
+ * authenticated principal, telling the user to "sign in" without offering a field would be a dead
+ * end, and the header that normally hosts this button is not rendered in that state.
+ */
+export function ResearchAccess({
+  defaultOpen = false,
+  onAuthenticated,
+}: {
+  defaultOpen?: boolean;
+  onAuthenticated?: () => void;
+}) {
   const { t, locale } = useLocale();
   const dialog = useRef<HTMLDialogElement>(null);
   const [token, setToken] = useState('');
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState(false);
+
+  // Browsers without `<dialog>` support, and jsdom, may not implement these methods.
+  const open = () => {
+    const element = dialog.current;
+    if (!element) return;
+    if (typeof element.showModal === 'function') element.showModal();
+    else element.setAttribute('open', '');
+  };
+  const close = () => {
+    const element = dialog.current;
+    if (!element) return;
+    if (typeof element.close === 'function') element.close();
+    else element.removeAttribute('open');
+  };
+
+  useEffect(() => {
+    if (!defaultOpen) return;
+    open();
+  }, [defaultOpen]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -28,13 +60,7 @@ export function ResearchAccess() {
       <button
         type="button"
         className="px-2 py-1 border border-slate-700 rounded text-xs hover:border-cyan-400/70"
-        onClick={() => {
-          if (typeof dialog.current?.showModal === 'function') {
-            dialog.current.showModal();
-          } else {
-            dialog.current?.setAttribute('open', '');
-          }
-        }}
+        onClick={open}
       >
         {t('research')}
       </button>
@@ -53,6 +79,8 @@ export function ResearchAccess() {
             e.preventDefault();
             setApiToken(token);
             setToken('');
+            close();
+            onAuthenticated?.();
           }}
           className="space-y-2"
         >
@@ -117,7 +145,7 @@ export function ResearchAccess() {
         <button
           type="button"
           className="border border-slate-600 rounded px-3 py-1.5 text-xs"
-          onClick={() => dialog.current?.close()}
+          onClick={close}
         >
           {t('close')}
         </button>

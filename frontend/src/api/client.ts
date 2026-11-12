@@ -12,9 +12,34 @@ import type {
   SnapCandidate,
 } from '../types/uai';
 
-let apiToken = '';
+/**
+ * Bearer token for server-side identity.
+ *
+ * In `demo` mode the server ignores it and grants a steward persona. Once real data exists it does
+ * not: every read except a fixed allow-list needs an authenticated principal, so the access dialog
+ * must survive a reload. The token is kept in `sessionStorage` (not `localStorage`) so it dies with
+ * the tab and is not shared with a second tab on a shared machine; it is only ever sent in an
+ * `Authorization` header, never in a URL.
+ */
+const TOKEN_STORAGE_KEY = 'roadscope.apiToken';
+let apiToken =
+  typeof window !== 'undefined' && window.sessionStorage
+    ? window.sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? ''
+    : '';
+
 export function setApiToken(token: string) {
   apiToken = token;
+  try {
+    if (!window.sessionStorage) return;
+    if (token) window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    else window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // A blocked storage API must not break authentication for this page load.
+  }
+}
+
+export function hasApiToken() {
+  return Boolean(apiToken);
 }
 
 async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {

@@ -5,6 +5,7 @@ import { ActiveFilters, describeFilters } from './components/ActiveFilters';
 import { CitizenReportWorkspace } from './components/CitizenReportWorkspace';
 import { DatasetBanner } from './components/DatasetBanner';
 import { HeaderBar } from './components/HeaderBar';
+import { ResearchAccess } from './components/ResearchAccess';
 import { IncidentDetails } from './components/IncidentDetails';
 import { MapCanvas } from './components/MapCanvas';
 import { PilotReportWorkspace } from './components/PilotReportWorkspace';
@@ -183,13 +184,34 @@ export const App: React.FC = () => {
   if (tehranPreview) return <TehranPreview onClose={() => setTehranPreview(false)} />;
 
   if (bootError) {
+    // An authenticated deployment answers every non-allow-listed read with 401, so the retry
+    // button alone is a dead end: the header that hosts the sign-in dialog is not rendered here.
+    const needsAuth = /authentication required|401|insufficient server-side role|403/i.test(bootError);
     return (
       <div className="min-h-screen bg-slate-950 text-rose-300 flex items-center justify-center p-8 font-mono text-sm">
         <div className="text-center space-y-4" role="alert">
           <p>{t('initializationError')}: <bdi>{bootError}</bdi></p>
-          <button type="button" onClick={() => { setBootError(null); void loadDatasetContext(); }} className="rounded bg-cyan-600 px-4 py-2 font-sans text-white hover:bg-cyan-500">
-            {t('retry')}
-          </button>
+          {needsAuth && (
+            <p className="font-sans text-xs text-amber-300">
+              {language === 'fa'
+                ? 'این استقرار به هویت سمت سرور نیاز دارد. با توکن دسترسی وارد شوید و سپس دوباره تلاش کنید.'
+                : 'This deployment requires a server-side identity. Sign in with an access token, then retry.'}
+            </p>
+          )}
+          <div className="flex items-center justify-center gap-2">
+            <button type="button" onClick={() => { setBootError(null); void loadDatasetContext(); }} className="rounded bg-cyan-600 px-4 py-2 font-sans text-white hover:bg-cyan-500">
+              {t('retry')}
+            </button>
+            {needsAuth && (
+              <ResearchAccess
+                defaultOpen
+                onAuthenticated={() => {
+                  setBootError(null);
+                  void loadDatasetContext();
+                }}
+              />
+            )}
+          </div>
         </div>
       </div>
     );
