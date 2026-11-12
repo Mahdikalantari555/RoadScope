@@ -28,6 +28,8 @@ def get_network_layers_geojson(
         """
         SELECT s.id, s.edge_code, s.name, s.road_class, s.speed_limit_kmh, s.lanes,
                s.length_m, s.sinuosity, s.slope_pct, s.elevation_level, s.aadt, s.geojson_4326,
+               s.source_feature_id, s.source_version, s.grade_source,
+               s.direction_source_detail, s.topology_ambiguous,
                t.aadt_vehicles_per_day AS obs_aadt, t.is_imputed, t.coverage_confidence,
                d.direction AS oneway_direction, d.source AS direction_source
         FROM road_segments s
@@ -58,6 +60,13 @@ def get_network_layers_geojson(
                 "aadt": int(r["obs_aadt"] if r["obs_aadt"] is not None else r["aadt"]) if (r["obs_aadt"] is not None or r["aadt"] is not None) else None,
                 "aadt_is_imputed": bool(r["is_imputed"]) if r["is_imputed"] is not None else None,
                 "coverage_confidence": round(float(r["coverage_confidence"]), 3) if r["coverage_confidence"] is not None else None,
+                # Provenance and honesty fields: which feature this segment came from, whether the
+                # grade is observed or assumed, and whether the geometry is topologically ambiguous.
+                "source_feature_id": r["source_feature_id"],
+                "source_version": r["source_version"],
+                "grade_source": r["grade_source"],
+                "direction_source_detail": r["direction_source_detail"],
+                "topology_ambiguous": bool(r["topology_ambiguous"]) if r["topology_ambiguous"] is not None else None,
             },
             "geometry": json.loads(r["geojson_4326"]),
         }
@@ -66,7 +75,8 @@ def get_network_layers_geojson(
 
     node_rows = conn.execute(
         """
-        SELECT id, node_code, node_type, degree, elevation_level, x_m, y_m, lon, lat
+        SELECT id, node_code, node_type, degree, elevation_level, x_m, y_m, lon, lat,
+               source_node_id, source_version
         FROM road_nodes WHERE dataset_id = ?
         """,
         (dataset_id,),
@@ -83,6 +93,8 @@ def get_network_layers_geojson(
                 "elevation_level": int(r["elevation_level"]),
                 "x_m": round(float(r["x_m"]), 2),
                 "y_m": round(float(r["y_m"]), 2),
+                "source_node_id": r["source_node_id"],
+                "source_version": r["source_version"],
             },
             "geometry": {"type": "Point", "coordinates": [float(r["lon"]), float(r["lat"])]},
         }
@@ -133,6 +145,30 @@ def get_network_layers_geojson(
     }
 
 
+#: Incident attributes that encumber a reporter's privacy. They are returned only to a server-side
+#: ``data_steward`` — the role that already owns triage and de-duplication of the same reports.
+#: Everyone else receives the event-level fields needed for analysis (category, severity, time,
+#: snapped segment and credibility) with these fields simply absent, not blanked.
+RESTRICTED_INCIDENT_FIELDS = frozenset(
+    {
+        "narrative",
+        "raw_lon",
+        "raw_lat",
+        "raw_x_m",
+        "raw_y_m",
+        "observational_radius_m",
+        "snap_candidates",
+        "reporting_lag_min",
+    }
+)
+
+
+def _scope_incident_properties(props: dict[str, Any], *, include_restricted: bool) -> dict[str, Any]:
+    if include_restricted:
+        return props
+    return {k: v for k, v in props.items() if k not in RESTRICTED_INCIDENT_FIELDS}
+
+
 def query_synchronized_cmv_state(
     conn: sqlite3.Connection,
     *,
@@ -147,6 +183,7 @@ def query_synchronized_cmv_state(
     segment_id: int | None = None,
     bbox_4326: list[float] | None = None,
     polygon_4326: list[list[float]] | None = None,
+    include_restricted_fields: bool = False,
 ) -> dict[str, Any]:
     """
     Bidirectional Linked Brushing & Cross-Filtering Engine (Epic 6 — US-6.1 & US-6.2):
@@ -364,6 +401,9 @@ def query_synchronized_cmv_state(
             "snapped_y_m": round(float(r["snapped_y_m"] or r["raw_y_m"]), 2),
             "snap_candidates": json.loads(r["snap_candidates_json"] or "[]"),
         }
+        props = _scope_incident_properties(
+            props, include_restricted=include_restricted_fields
+        )
 
         incident_features.append(
             {

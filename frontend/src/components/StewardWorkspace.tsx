@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Flag, GitMerge, Lock, Navigation, ShieldCheck, XCircle } from 'lucide-react';
 import { uaiApi } from '../api/client';
+import { PilotStewardConsole } from './PilotStewardConsole';
 import { useLanguage } from '../i18n';
 import { domainLabel } from '../analyticsI18n';
 import { getStewardText } from '../workspaceI18n';
@@ -26,7 +27,7 @@ export const StewardWorkspace: React.FC<StewardWorkspaceProps> = ({
   const { language, t } = useLanguage();
   const copy = getStewardText(language);
 
-  const [subTab, setSubTab] = useState<'clusters' | 'queue' | 'diagnostics' | 'audit'>('clusters');
+  const [subTab, setSubTab] = useState<'clusters' | 'queue' | 'diagnostics' | 'audit' | 'pilot'>('clusters');
   const [data, setData] = useState<{
     triage_queue: Record<string, any>[];
     duplicate_clusters: Record<string, any>[];
@@ -154,6 +155,7 @@ export const StewardWorkspace: React.FC<StewardWorkspaceProps> = ({
               { id: 'queue', label: `${copy.tabQueue} (${data.triage_queue.length})` },
               { id: 'diagnostics', label: copy.tabDiagnostics },
               { id: 'audit', label: `${copy.tabAudit} (${data.diagnostics.audit_logs.length})` },
+              { id: 'pilot', label: copy.tabPilot },
             ].map((tb) => (
               <button
                 type="button"
@@ -425,7 +427,17 @@ export const StewardWorkspace: React.FC<StewardWorkspaceProps> = ({
             </div>
           )}
 
-          {/* 4. Immutable Audit Log */}
+          {/* 4. Restricted pilot controls (flags, publication gate, retention) */}
+          {subTab === 'pilot' && (
+            <PilotStewardConsole
+              darkMode={darkMode}
+              datasetId={datasetId}
+              activeRole={activeRole}
+              onFlyTo={onFlyTo}
+            />
+          )}
+
+          {/* 5. Immutable Audit Log */}
           {subTab === 'audit' && (
             <div className={`${cardCls} space-y-2`}>
               <div className="font-semibold">{copy.auditTitle}</div>

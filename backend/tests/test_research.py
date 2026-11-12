@@ -1,11 +1,14 @@
 import math
 import sqlite3
+from pathlib import Path
 
 import networkx as nx
 import numpy as np
 import pytest
 
 from app.services import research as r
+
+TEST_FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def test_directed_conservation_and_heat():
@@ -114,7 +117,7 @@ def test_upgrade_replay_and_backup(tmp_path):
     init_schema_and_reference_data(path)
     with get_connection(path) as conn:
         # 003 (directed network), 004 (research contracts) and 005 (study areas / CRS-agnostic schema)
-        assert conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 3
+        assert conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 4
     copy = tmp_path / "backup.sqlite"
     backup_database(path, copy)
     with sqlite3.connect(copy) as conn:
@@ -124,12 +127,12 @@ def test_upgrade_replay_and_backup(tmp_path):
 
 
 def test_legacy_database_upgrade_preserves_rows(tmp_path):
-    from app.config import PROJECT_ROOT
     from app.db import init_schema_and_reference_data
     from app.migrations import backup_database
 
     path = tmp_path / "legacy.sqlite"
-    backup_database(PROJECT_ROOT / "data" / "uai.sqlite", path)
+    # Committed legacy (EPSG:25832) fixture; the shipped demo database is deliberately not tracked.
+    backup_database(TEST_FIXTURES / "legacy_uai_25832.sqlite", path)
     with sqlite3.connect(path) as conn:
         before = conn.execute("SELECT COUNT(*) FROM accidents").fetchone()[0]
         audits = conn.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0]

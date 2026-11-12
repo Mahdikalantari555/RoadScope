@@ -49,3 +49,25 @@ Exposed transparently via `GET /api/v1/research/capabilities` and localized in E
 
 - **`external_cloud_llm_narratives`**: Disabled by strict privacy policy; narrative experiments execute 100% locally via deterministic PII scrubbing and `local-charword-svd-v1` only after `consent_verified=true`.
 - **`uncalibrated_operational_deployment`**: Research posteriors and rankings are calibrated on synthetic/demo urban data and require agency-verified police crash registries + metered AADT sensors prior to real-world capital allocation.
+
+---
+
+## 3. Frontend Experience Improvements (`frontend-experience-improvements`)
+
+The UI work is complete and verified *as an implementation*; the checklist stays open until the
+shared presentation contract in `tehran-synthetic-demo` is agreed (task 1.3), because that contract
+is owned by both changes, not by the frontend alone.
+
+| Area | Where | Behaviour |
+|---|---|---|
+| Bilingual methods guidance | `frontend/src/methodsGuidance.ts`, `components/MethodsHelp.tsx` | Units, assumptions, data source and uncertainty per supported output; EN/FA, RTL-correct |
+| Accessible feature details | `components/SegmentDetails.tsx`, `components/IncidentDetails.tsx` | Focus-managed drawers; every absent field renders `not reported` instead of a fabricated value; restricted reporter fields never requested for non-stewards |
+| Active-filter summary | `components/ActiveFilters.tsx`, `hooks/usePersistedFilters.ts` | Named chips, per-filter clear, reset-all, persistence scoped to the dataset id and validated on load |
+| Coordinated charts | `components/AnalyticsWorkspace.tsx`, `hooks/useCmvQuery.ts` | Visible selection, debounce, sequence-guarded requests, explicit `loading` / `stale` / `error` states |
+| Presentation mode | `components/PresentationFrame.tsx`, `presentation.ts` | Dataset name, synthetic status, source + extract version, licence, attribution, legend note, filter summary and research caveat are **DOM text**, so screenshots always contain them |
+| Non-WebGL fallback | `components/OfflineMapFallback.tsx` | Plain SVG rendering of the same GeoJSON with a visible "reduced view" warning; analytical workspaces stay usable |
+| Restricted pilot surfaces | `components/PilotReportWorkspace.tsx`, `components/PilotStewardConsole.tsx`, `pilotI18n.ts` | Flag- and gate-driven intake, one-time credential, tracking/withdrawal, steward console for flags, publication, retention and extracts |
+
+Verification: `npx tsc --noEmit` clean, `npx vitest run` **90 passed**, `npm run build` succeeds,
+backend `120 passed`. None of this authorizes a real-data pilot — see
+[`docs/OPERATIONS.md`](OPERATIONS.md) §6.

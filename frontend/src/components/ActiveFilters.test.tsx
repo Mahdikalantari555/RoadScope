@@ -14,9 +14,9 @@ describe('active filters', () => {
     render(<LanguageProvider><ActiveFilters filters={filters} onUpdate={update} onReset={reset}/></LanguageProvider>);
     fireEvent.click(screen.getByRole('button', { name: /Remove filter: Severity:.*PDO/i }));
     expect(update).toHaveBeenCalledWith({severity_codes: ['FATAL']});
-    fireEvent.click(screen.getByRole('button', { name: /Remove filter: Hour: 0/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Remove filter: Hour: 00:00/i }));
     expect(update).toHaveBeenCalledWith({hour_filter: null});
-    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all filters' }));
     expect(reset).toHaveBeenCalledOnce();
   });
 });

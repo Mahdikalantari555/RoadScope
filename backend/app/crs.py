@@ -12,6 +12,19 @@ from shapely.ops import substring
 
 from .config import CANONICAL_EPSG, WEB_EPSG
 
+# ----------------------------------------------------------------------------------------------
+# CRS contract (see docs/OPERATIONS.md §1)
+#
+#   * Metric storage and computation use each dataset's own canonical CRS
+#     (`dataset_sources.crs_epsg`): central Tehran EPSG:32639, legacy Frankfurt EPSG:25832.
+#   * Exchange and GeoJSON serialization are always EPSG:4326, longitude first (x = lon).
+#   * A process-global EPSG is only a fallback for calls that genuinely have no dataset. Routes and
+#     services must pass the dataset's EPSG explicitly through `dataset_context()`.
+#   * The `*_25832_*` aliases below are retained for import compatibility with the pre-
+#     generalization code base. They are *not* EPSG:25832-specific: they forward the caller's
+#     canonical EPSG, and no new code should use them.
+# ----------------------------------------------------------------------------------------------
+
 
 @lru_cache(maxsize=64)
 def _transformers(canonical_epsg: int) -> tuple[Transformer, Transformer]:

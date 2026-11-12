@@ -29,6 +29,11 @@ export function useCmvQuery(datasetId: number | undefined, filters: CmvFilterSta
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasetId, key, revision]);
 
-  const visible = state.key === key ? state : { key, status: 'loading' as const, data: null, error: null };
-  return { ...visible, refresh };
+  // A response for a previous selection is never presented as the current one. `stale` tells the
+  // UI that it is deliberately showing the previous, clearly-labelled result while the new query
+  // is still in flight (instead of blanking the screen or showing a spinner over old numbers).
+  const isCurrent = state.key === key;
+  const stale = !isCurrent && state.status === 'ready' && state.data !== null;
+  const visible = isCurrent ? state : { key, status: 'loading' as const, data: null, error: null };
+  return { ...visible, stale, refresh };
 }

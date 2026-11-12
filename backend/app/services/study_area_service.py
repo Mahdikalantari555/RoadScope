@@ -19,6 +19,9 @@ def resolve_study_area(key: str | None, conn: sqlite3.Connection | None = None) 
     provenance of user-registered areas across restarts.
     """
     if key:
+        # Registry definitions (built-in or file/env) always win: they carry the CRS, the optional
+        # boundary, the extract provenance and the tile-provider policy. A persisted row is only a
+        # fallback for user-registered areas that no longer appear in a JSON file.
         try:
             return get_study_area(key)
         except KeyError:
@@ -66,9 +69,25 @@ def _area_from_row(row: sqlite3.Row) -> StudyArea:
     )
 
 
-def upsert_study_area(conn: sqlite3.Connection, raw: dict[str, Any], *, provenance: str = "user") -> StudyArea:
+def upsert_study_area(
+    conn: sqlite3.Connection,
+    raw: dict[str, Any],
+    *,
+    provenance: str = "user",
+    enforce_guard: bool = True,
+) -> StudyArea:
     """Register a study area at runtime (validated, persisted, usable immediately)."""
-    area = register_study_area(raw)
+    area = register_study_area(raw, enforce_guard=enforce_guard)
+    _persist_area(conn, area, provenance=provenance)
+    return area
+
+
+def _persist_area(conn: sqlite3.Connection, area: StudyArea, *, provenance: str) -> None:
+    """Write the queryable subset of a study-area definition to the database.
+
+    Deliberately does **not** mutate the in-memory registry: the persisted row cannot represent
+    extract provenance, licensing, tile-provider policy or disclaimers.
+    """
     boundary_json = None
     if area.boundary_4326:
         boundary_json = json.dumps(
@@ -112,14 +131,16 @@ def upsert_study_area(conn: sqlite3.Connection, raw: dict[str, Any], *, provenan
         ),
     )
     clear_context_cache()
-    return area
 
 
 def sync_study_areas(conn: sqlite3.Connection) -> int:
     """Persist every file/env study area so the registry survives restarts and is queryable."""
     count = 0
     for area in list_study_areas():
-        upsert_study_area(conn, area.to_json(), provenance="file")
+        # Persist for queryability only. Built-in/file areas are *not* re-registered in memory: the
+        # persisted row is a lossy subset (no extract provenance, tile policy or disclaimer), and
+        # replacing the rich in-code definition with it would silently erase provenance.
+        _persist_area(conn, area, provenance="file")
         count += 1
     return count
 

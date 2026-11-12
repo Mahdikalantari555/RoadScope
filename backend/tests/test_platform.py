@@ -43,15 +43,18 @@ def test_health_and_dual_crs_meta(test_client: TestClient) -> None:
     res = test_client.get("/api/v1/health")
     assert res.status_code == 200
     body = res.json()
-    # The default demo dataset is Tehran (metric EPSG:3857, valid worldwide).
-    assert body["canonical_crs"] == "EPSG:3857"
+    # The default demo dataset is central Tehran, stored in UTM 39N (EPSG:32639).
+    assert body["canonical_crs"] == "EPSG:32639"
+    assert body["canonical_epsg"] == 32639
+    assert body["dataset_profile"] == "demo"
+    assert body["is_synthetic"] is True
     assert body["web_crs"] == "EPSG:4326"
     assert body["study_area_key"] == "tehran"
     assert body["datasets_initialized"] >= 1
 
     meta = test_client.get("/api/v1/meta").json()
     assert meta["active_dataset"]["is_synthetic"] is True
-    assert meta["active_dataset"]["crs_epsg"] == 3857
+    assert meta["active_dataset"]["crs_epsg"] == 32639
     assert meta["active_dataset"]["study_area_key"] == "tehran"
     assert meta["ingestion_scope"] == "worldwide"
     assert meta["boundary_enforced"] is False
@@ -92,7 +95,7 @@ def test_crs_roundtrip_projection(test_client: TestClient) -> None:
     # Round-trip a Tehran coordinate through the active dataset's metric CRS.
     p2 = test_client.post("/api/v1/crs/project", json={"lon": 51.3890, "lat": 35.6892}).json()
     assert 51.3 < p2["lon"] < 51.5 and 35.6 < p2["lat"] < 35.8
-    assert p2["srid"] == 3857
+    assert p2["srid"] == 32639
 
     p1 = test_client.post("/api/v1/crs/project", json={"x_m": p2["x_m"], "y_m": p2["y_m"]})
     assert p1.status_code == 200
@@ -101,7 +104,9 @@ def test_crs_roundtrip_projection(test_client: TestClient) -> None:
     assert abs(d1["lat"] - 35.6892) < 1e-4
 
 
-DEMO_ORIGIN_3857 = (5719500.0, 4252000.0)
+# The synthetic demo network is authored natively in EPSG:32639 (central Tehran, metres).
+DEMO_ORIGIN_32639 = (535000.0, 3949600.0)
+DEMO_ORIGIN_3857 = DEMO_ORIGIN_32639
 
 
 def test_network_distance_exceeds_euclidean_across_river_and_overpass() -> None:

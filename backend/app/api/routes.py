@@ -6,13 +6,21 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Response
 
-from ..config import WEB_EPSG
+from ..config import (
+    BASEMAP_ATTRIBUTION,
+    BASEMAP_MAX_ZOOM,
+    BASEMAP_TILE_URL,
+    MAX_IMPORT_BYTES,
+    WEB_EPSG,
+)
 from ..context import dataset_context
 from ..crs import metric_circle_geojson_4326, safe_to_metric, to_metric, to_wgs84
-from ..db import db_session
+from ..study_areas import StudyArea
+from ..db import dataset_profile, db_session
 from ..geo_bbox import bbox_geojson, dataset_bbox
 from ..schemas import (
     CitizenReportSubmitRequest,
+    NetworkExtractImportRequest,
     CmvQueryRequest,
     CoordinateProjectRequest,
     CorroborateRequest,
@@ -40,7 +48,12 @@ from ..services.map_matching import (
     compute_topological_snap_candidates,
     find_spatiotemporal_conflation_candidates,
 )
-from ..services.ingest import create_dataset_for_study_area, import_network_geojson
+from ..services.ingest import (
+    create_dataset_for_study_area,
+    import_network_extract,
+    import_network_geojson,
+    load_extract_document,
+)
 from ..services.network_generator import get_study_area_context_geojson
 from ..services.point_process_sim import SCENARIO_METADATA, run_stochastic_network_simulation
 from ..services.risk_eb_engine import compute_exposure_risk_and_eb
@@ -77,6 +90,79 @@ def _trusted_role(legacy: str) -> str:
 router = APIRouter(prefix="/api/v1")
 
 
+def _basemap_config(area: StudyArea | None) -> dict[str, Any]:
+    """Optional, attributed tile-provider configuration with an explicit offline fallback.
+
+    The map must remain usable when tiles are unreachable (task 2.2/3.4). A provider is only
+    advertised when one is configured for the study area or by the operator; the client always
+    renders a vector fallback, attribution and a visible warning when it fails.
+    """
+    tile_url = BASEMAP_TILE_URL or (area.tile_provider_url if area else "")
+    return {
+        "enabled": bool(tile_url),
+        "optional": True,
+        "tile_url": tile_url,
+        "max_zoom": BASEMAP_MAX_ZOOM,
+        "attribution": BASEMAP_ATTRIBUTION,
+        "provider_name": (area.tile_provider_name if area else "") or "OpenStreetMap raster tiles",
+        "policy_url": (area.tile_provider_policy_url if area else "")
+        or "https://operations.osmfoundation.org/policies/tiles/",
+        "fallback": "offline_vector_layer_with_warning",
+        "bulk_download": "not permitted; the tile service is not an SLA",
+    }
+
+
+def _presentation_contract(
+    active_ds: dict[str, Any] | None,
+    area: StudyArea | None,
+    location: dict[str, Any],
+    provenance: dict[str, Any],
+) -> dict[str, Any]:
+    """Persistent presentation context: dataset, synthetic status, source, legend, filters.
+
+    This is the shared contract agreed with ``frontend-experience-improvements`` task 1.3. The
+    client must keep these values on screen (including in a screenshot) and must not hide them in
+    presentation mode.
+    """
+    return {
+        "dataset_id": active_ds["id"] if active_ds else None,
+        "dataset_name": active_ds["name"] if active_ds else "",
+        "dataset_profile": active_ds["profile_key"] if active_ds else "",
+        "synthetic_incidents": bool(active_ds["is_synthetic"]) if active_ds else None,
+        "study_area_key": location["study_area_key"],
+        "study_area_label_en": area.label_en if area else location["study_area"],
+        "study_area_label_fa": area.label_fa if area else location["study_area_fa"],
+        "network_source": provenance.get("network_source") or (area.network_source if area else ""),
+        "network_extract_version": provenance.get("extract_version", ""),
+        "network_checksum_sha256": provenance.get("checksum_sha256", ""),
+        "license": provenance.get("license") or (area.extract_license if area else ""),
+        "attribution": provenance.get("source_attribution") or (area.extract_attribution if area else ""),
+        "legend_note": (
+            "Synthetic incidents on a labelled demo network"
+            if active_ds and active_ds["is_synthetic"]
+            else "Observed reports (pilot) — see publication status"
+        ),
+        "required_visible_elements": [
+            "dataset name",
+            "synthetic or real status",
+            "network source and extract version",
+            "license and attribution",
+            "legend",
+            "active filter summary",
+            "research-only caveat",
+        ],
+        "screenshot_guidance": (
+            "Use the presentation view. Attribution, synthetic status, dataset name and filters "
+            "are rendered as DOM overlays, so a browser screenshot contains them. Do not rely on "
+            "cross-origin canvas export, which is not verified for third-party tiles."
+        ),
+        "center_4326": location["center_4326"],
+        "network_bbox_4326": location["network_bbox_4326"],
+        "canonical_crs": f"EPSG:{location['canonical_epsg']}",
+        "filters_persisted": True,
+    }
+
+
 def _resolve_dataset_id(conn: sqlite3.Connection, requested_id: int | None) -> int:
     if requested_id is not None:
         row = conn.execute("SELECT id FROM dataset_sources WHERE id = ?", (requested_id,)).fetchone()
@@ -99,14 +185,30 @@ def health_check() -> dict[str, Any]:
             "SELECT id FROM dataset_sources WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
         ).fetchone()
         ctx = dataset_context(conn, int(row["id"]) if row else None)
+        profile = dataset_profile(conn, int(row["id"]) if row else None)
+        dataset_row = (
+            conn.execute("SELECT * FROM dataset_sources WHERE id = ?", (int(row["id"]),)).fetchone()
+            if row
+            else None
+        )
+    provenance = json.loads(dataset_row["network_provenance_json"] or "{}") if dataset_row else {}
     return {
         "status": "ok",
         "canonical_crs": f"EPSG:{ctx.canonical_epsg}",
+        "canonical_epsg": ctx.canonical_epsg,
         "web_crs": f"EPSG:{WEB_EPSG}",
         "study_area_key": ctx.study_area_key,
         "boundary_enforced": False,
         "ingestion_scope": "worldwide",
         "datasets_initialized": int(ds_cnt),
+        "dataset_profile": profile["profile_key"],
+        "is_synthetic": profile["is_synthetic"],
+        "calibration_status": profile["calibration_status"],
+        "network_provenance": provenance,
+        "basemap": _basemap_config(ctx.study_area),
+        "synthetic_demo": True if profile["is_synthetic"] else False,
+        "disclaimer_en": ctx.study_area.disclaimer_en if ctx.study_area else "",
+        "disclaimer_fa": ctx.study_area.disclaimer_fa if ctx.study_area else "",
     }
 
 
@@ -133,7 +235,32 @@ def get_platform_metadata() -> dict[str, Any]:
         ctx = dataset_context(conn, int(active_row["id"]) if active_row else None)
         location = platform_location_payload(conn, ctx)
         study_areas = list_study_area_payload(conn)
+        profile = dataset_profile(conn, int(active_row["id"]) if active_row else None)
+        active_extract = None
+        if active_row:
+            extract_row = conn.execute(
+                "SELECT * FROM network_extracts WHERE dataset_id = ? ORDER BY id DESC LIMIT 1",
+                (int(active_row["id"]),),
+            ).fetchone()
+            if extract_row:
+                active_extract = {
+                    "extract_version": extract_row["extract_version"],
+                    "checksum_sha256": extract_row["checksum_sha256"],
+                    "license": extract_row["license"],
+                    "snapshot_date": extract_row["snapshot_date"],
+                    "attribution": extract_row["source_attribution"],
+                    "segment_count": int(extract_row["segment_count"]),
+                    "ambiguous_crossing_count": int(extract_row["ambiguous_crossing_count"]),
+                    "imported_at_utc": extract_row["imported_at_utc"],
+                }
 
+    area = ctx.study_area
+    active_provenance = (
+        json.loads(active_ds["network_provenance_json"] or "{}") if active_ds else {}
+    )
+    active_incident_provenance = (
+        json.loads(active_ds["incident_provenance_json"] or "{}") if active_ds else {}
+    )
     return {
         "canonical_crs": f"EPSG:{ctx.canonical_epsg}",
         "canonical_crs_name": f"{ctx.crs_name} (metric, meters)",
@@ -158,6 +285,32 @@ def get_platform_metadata() -> dict[str, Any]:
         "context_geojson": get_study_area_context_geojson(
             ctx, demo_network=active_ds["generator_params"].get("network_generator") if active_ds else None
         ),
+        # --- Presentation contract (shared with frontend-experience-improvements task 1.3) -----
+        "dataset_profile": profile["profile_key"],
+        "dataset_profile_purpose": profile["purpose"],
+        "allows_real_reports": profile["allows_real_reports"],
+        "allows_publication": profile["allows_publication"],
+        "calibration_status": profile["calibration_status"],
+        "network_provenance": active_provenance,
+        "incident_provenance": active_incident_provenance,
+        "active_extract": active_extract,
+        "is_synthetic_incidents": bool(active_ds["is_synthetic"]) if active_ds else None,
+        "basemap": _basemap_config(area),
+        "tile_provider": _basemap_config(area),
+        "attribution": (area.extract_attribution if area else "")
+        or active_provenance.get("source_attribution", ""),
+        "disclaimer_en": area.disclaimer_en if area else "",
+        "disclaimer_fa": area.disclaimer_fa if area else "",
+        "presentation": _presentation_contract(active_ds, area, location, active_provenance),
+        "profile_independence": {
+            "isolated_profiles": ["demo", "pilot", "legacy"],
+            "profile_database_overrides": "ROADSCOPE_PROFILE_DB",
+            "note": (
+                "Synthetic demo, restricted pilot and legacy datasets are never activated into "
+                "one another; each keeps its own CRS, provenance and provenance labels."
+            ),
+        },
+        "study_area_metadata": area.to_json() if area else None,
     }
 
 
@@ -299,16 +452,23 @@ def preview_vgi_snap_and_conflate(req: SnapConflatePreviewRequest) -> dict[str, 
     try:
         with db_session() as conn:
             ds_id = _resolve_dataset_id(conn, req.dataset_id)
+            # The dataset's own metric CRS is authoritative. Never fall back to a process-global
+            # EPSG: a Tehran dataset (EPSG:32639) and a legacy EPSG:25832 dataset coexist.
+            ctx = dataset_context(conn, ds_id)
             if req.x_m is not None and req.y_m is not None:
                 rx_m, ry_m = float(req.x_m), float(req.y_m)
-                rlon, rlat = to_wgs84(rx_m, ry_m)
+                validate_metric_bounds(rx_m, ry_m, ctx.canonical_epsg)
+                rlon, rlat = to_wgs84(rx_m, ry_m, ctx.canonical_epsg)
             elif req.lon is not None and req.lat is not None:
                 rlon, rlat = float(req.lon), float(req.lat)
-                rx_m, ry_m = to_metric(rlon, rlat)
+                metric = safe_to_metric(rlon, rlat, ctx.canonical_epsg)
+                if metric is None:
+                    raise ValueError(
+                        f"({rlon}, {rlat}) is not representable in EPSG:{ctx.canonical_epsg}."
+                    )
+                rx_m, ry_m = metric
             else:
                 raise ValueError("Provide either (lon, lat) or (x_m, y_m).")
-
-            validate_metric_bounds(rx_m, ry_m, dataset_context(conn, ds_id).canonical_epsg)
 
             cands = compute_topological_snap_candidates(
                 conn,
@@ -330,7 +490,6 @@ def preview_vgi_snap_and_conflate(req: SnapConflatePreviewRequest) -> dict[str, 
                 max_time_diff_min=req.max_time_diff_min,
             )
 
-            ctx = dataset_context(conn, ds_id)
             circle_geojson = metric_circle_geojson_4326(
                 rx_m, ry_m, req.observational_radius_m, canonical_epsg=ctx.canonical_epsg
             )
@@ -662,6 +821,12 @@ def evaluate_risk_eb_endpoint(req: RiskEbEvaluationRequest) -> dict[str, Any]:
 
 @router.post("/analytics/cmv")
 def synchronized_cmv_endpoint(req: CmvQueryRequest) -> dict[str, Any]:
+    # Reporter-supplied narrative and raw coordinates are returned only to a server-side steward.
+    # The client cannot request them by asserting a persona; the role comes from the middleware.
+    from ..security import identity as _identity
+
+    principal = _identity.get()
+    include_restricted = bool(principal is not None and principal.role == "data_steward")
     with db_session() as conn:
         ds_id = _resolve_dataset_id(conn, req.dataset_id)
         return query_synchronized_cmv_state(
@@ -677,6 +842,7 @@ def synchronized_cmv_endpoint(req: CmvQueryRequest) -> dict[str, Any]:
             segment_id=req.segment_id,
             bbox_4326=req.bbox_4326,
             polygon_4326=req.polygon_4326,
+            include_restricted_fields=include_restricted,
         )
 
 
@@ -760,7 +926,7 @@ def ingest_network_geojson(req: NetworkImportRequest) -> dict[str, Any]:
                     actor_role=_trusted_role(req.actor_role),
                 )
                 dataset_id = int(created["dataset_id"])
-            return import_network_geojson(
+            result = import_network_geojson(
                 conn,
                 dataset_id=int(dataset_id),
                 geojson=payload,
@@ -771,8 +937,144 @@ def ingest_network_geojson(req: NetworkImportRequest) -> dict[str, Any]:
                 activate=req.activate,
                 actor_role=_trusted_role(req.actor_role),
             )
+            # Region-agnostic ingestion is experimental and creates *no* traffic/exposure data;
+            # report that honestly instead of implying a validated analytical dataset.
+            result["exposure_provenance"] = "none (geometry-only import; no traffic observations)"
+            result["activated"] = bool(req.activate)
+            return result
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/ingest/network/extract")
+def ingest_network_extract(req: NetworkExtractImportRequest) -> dict[str, Any]:
+    """Import a *versioned* street-network extract with checksum and provenance.
+
+    Accepts an inline GeoJSON document, inline GraphML text, or an absolute server-side file path.
+    The same extract imported twice is a no-op (idempotent by content checksum). Remote URLs are
+    refused: operators obtain and verify the extract out of band.
+    """
+    document: dict[str, Any] | str | None = req.geojson
+    if req.graphml:
+        document = req.graphml
+    if document is None and req.extract_path:
+        try:
+            document = load_extract_document(req.extract_path, max_bytes=MAX_IMPORT_BYTES)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if document is None:
+        raise HTTPException(
+            status_code=422, detail="Provide inline geojson, graphml text, or a server-side extract_path."
+        )
+
+    boundary: dict[str, float] | None = None
+    if req.boundary_4326:
+        if len(req.boundary_4326) != 4:
+            raise HTTPException(status_code=422, detail="boundary_4326 must be [min_lon, min_lat, max_lon, max_lat].")
+        boundary = {
+            "min_lon": float(req.boundary_4326[0]),
+            "min_lat": float(req.boundary_4326[1]),
+            "max_lon": float(req.boundary_4326[2]),
+            "max_lat": float(req.boundary_4326[3]),
+        }
+
+    try:
+        with db_session() as conn:
+            dataset_id = req.dataset_id
+            if dataset_id is None:
+                created = create_dataset_for_study_area(
+                    conn,
+                    study_area_key=req.study_area_key or _default_study_area_key(conn),
+                    name=req.dataset_name,
+                    description="Versioned street-network extract import",
+                    lixel_resolution_m=req.lixel_resolution_m,
+                    is_synthetic=False,
+                    activate=False,
+                    actor_role=_trusted_role(req.actor_role),
+                )
+                dataset_id = int(created["dataset_id"])
+            if boundary is None:
+                area = resolve_study_area(req.study_area_key, conn) if req.study_area_key else None
+                if area and area.boundary_4326:
+                    boundary = dict(area.boundary_4326)
+            return import_network_extract(
+                conn,
+                dataset_id=int(dataset_id),
+                document=document,
+                epsg_in=req.epsg_in,
+                extract_version=req.extract_version,
+                source_url=req.source_url,
+                source_attribution=req.source_attribution or "© OpenStreetMap contributors",
+                license_text=req.license or "ODbL 1.0 (OpenStreetMap)",
+                snapshot_date=req.snapshot_date,
+                boundary_4326=boundary,
+                buffer_m=req.buffer_m,
+                lixel_resolution_m=req.lixel_resolution_m,
+                activate=req.activate,
+                actor_role=_trusted_role(req.actor_role),
+                study_area_key=req.study_area_key,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/ingest/network/extracts")
+def list_network_extracts(dataset_id: int | None = Query(default=None)) -> dict[str, Any]:
+    """List imported extracts with their checksum, license and coverage diagnostics."""
+    with db_session() as conn:
+        ds_id = _resolve_dataset_id(conn, dataset_id)
+        rows = conn.execute(
+            "SELECT * FROM network_extracts WHERE dataset_id = ? ORDER BY id DESC", (ds_id,)
+        ).fetchall()
+        return {
+            "dataset_id": ds_id,
+            "extracts": [
+                {
+                    **{k: row[k] for k in row.keys() if k.endswith("_count") or k in {
+                        "id", "extract_key", "extract_version", "format", "source_url",
+                        "source_attribution", "license", "snapshot_date", "checksum_sha256",
+                        "buffer_m", "epsg_in", "epsg_out", "imported_at_utc", "boundary_json",
+                    }},
+                    "coverage": json.loads(row["coverage_json"] or "{}"),
+                    "provenance": json.loads(row["provenance_json"] or "{}"),
+                }
+                for row in rows
+            ],
+        }
+
+
+@router.get("/ingest/boundary")
+def ingest_boundary(study_area_key: str = Query(default="tehran")) -> dict[str, Any]:
+    """Published analytical boundary + buffer with its recorded provenance.
+
+    The central-Tehran rectangle is a *recorded provisional selection*, not an official
+    administrative boundary. Licensing and the extract version are reported next to it.
+    """
+    try:
+        area = resolve_study_area(study_area_key, None)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "study_area_key": area.key,
+        "boundary_4326": area.boundary_4326,
+        "buffer_m": area.boundary_buffer_m,
+        "canonical_epsg": area.canonical_epsg,
+        "extract_version": area.extract_version,
+        "license": area.extract_license,
+        "attribution": area.extract_attribution,
+        "snapshot_date": area.extract_snapshot_date,
+        "extract_checksum_sha256": area.extract_checksum_sha256,
+        "provider": {
+            "tile_url": area.tile_provider_url,
+            "name": area.tile_provider_name,
+            "policy_url": area.tile_provider_policy_url,
+        },
+        "status": "provisional_recorded_selection",
+        "note": (
+            "A provisional rectangle used for clipping and provenance. Official administrative "
+            "boundary confirmation and database-redistribution review remain open decisions."
+        ),
+    }
 
 
 @router.get("/ingest/events")

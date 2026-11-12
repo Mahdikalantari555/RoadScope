@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .api.pilot_routes import router as pilot_router
 from .api.research_routes import router as research_router
 from .api.routes import router as api_router
 from .api.tehran_preview import router as tehran_preview_router
@@ -29,6 +30,15 @@ def ensure_initialized() -> None:
             # The first-run demo dataset is bound to the configured study area (Tehran by
             # default). Adding another city later is a data operation, not a code change.
             area = resolve_study_area(DEFAULT_STUDY_AREA, conn)
+            if area.key != "tehran" and not area.demo:
+                # Never silently fall back to another city's geometry. If the configured study
+                # area is not a synthetic demo, startup stops with an explicit instruction.
+                raise RuntimeError(
+                    f"Default study area '{area.key}' has no seeded synthetic network. "
+                    "Import a versioned street-network extract with POST /api/v1/ingest/network/extract "
+                    "or set ROADSCOPE_DEFAULT_STUDY_AREA to a demo area. Refusing to start with an "
+                    "unlabelled or substituted network."
+                )
             run_stochastic_network_simulation(
                 conn,
                 scenario_key="MULTI_COVARIATE_URBAN",
@@ -71,6 +81,7 @@ app.add_middleware(
 install_security(app)
 app.include_router(api_router)
 app.include_router(research_router)
+app.include_router(pilot_router)
 app.include_router(tehran_preview_router)
 
 

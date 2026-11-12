@@ -203,3 +203,98 @@ class NetworkImportRequest(BaseModel):
     geojson_url: str | None = None
     activate: bool = True
     actor_role: str = "data_steward"
+
+
+# ----------------------------------------------------------------------------------------------
+# Restricted pilot (tehran-citizen-reporting). Free text, photos and identity documents are
+# deliberately absent: the intake model cannot express them.
+# ----------------------------------------------------------------------------------------------
+class PilotReportSubmitRequest(BaseModel):
+    dataset_id: int | None = None
+    occurred_at_local: str = Field(max_length=40)
+    timezone: str = Field(default="Asia/Tehran", max_length=64)
+    category_code: str = Field(max_length=40)
+    severity_code: str = Field(max_length=40)
+    location_uncertainty_m: float = Field(default=20.0, ge=3.0, le=500.0, allow_inf_nan=False)
+    lon: float | None = None
+    lat: float | None = None
+    x_m: float | None = None
+    y_m: float | None = None
+    selected_segment_id: int | None = None
+    consent_given: bool = False
+    consent_locale: Literal["fa", "en"] = "fa"
+    transport_mode: Literal[
+        "vehicle_occupant", "pedestrian", "cyclist", "motorcyclist", "witness", "other"
+    ] = "vehicle_occupant"
+    involved_vehicles: int = Field(default=1, ge=0, le=20)
+    involved_pedestrians: int = Field(default=0, ge=0, le=20)
+    involved_cyclists: int = Field(default=0, ge=0, le=20)
+    allow_outside_study_area: bool = True
+    # A coarse identity hint (never a raw IP address) used only for rate-limit bucketing.
+    reporter_identity_hint: str = Field(default="", max_length=120)
+
+
+class PilotTrackingRequest(BaseModel):
+    dataset_id: int | None = None
+    credential: str = Field(min_length=8, max_length=64)
+
+
+class PilotWithdrawalRequest(BaseModel):
+    dataset_id: int | None = None
+    credential: str = Field(default="", max_length=64)
+    reason: str = Field(default="", max_length=200)
+
+
+class PilotModerationRequest(BaseModel):
+    dataset_id: int | None = None
+    accident_id: int = Field(gt=0)
+    action: Literal["verify", "reject", "flag_review", "merge", "unmerge", "delete", "restore"]
+    canonical_accident_id: int | None = None
+    reason: str = Field(default="", max_length=500)
+
+
+class PilotCorrectionRequest(BaseModel):
+    dataset_id: int | None = None
+    accident_id: int = Field(gt=0)
+    field_name: str = Field(max_length=60)
+    previous_value: Any = None
+    new_value: Any = None
+    reason: str = Field(default="", max_length=300)
+
+
+class PilotPublishRequest(BaseModel):
+    dataset_id: int | None = None
+    disclosure_policy_reference: str = Field(default="", max_length=200)
+
+
+class PilotFeatureFlagRequest(BaseModel):
+    key: str = Field(max_length=64)
+    enabled: bool
+    owner: str = Field(default="", max_length=160)
+    approval_reference: str = Field(default="", max_length=200)
+    dataset_id: int | None = None
+    notes: str = Field(default="", max_length=500)
+
+
+# ----------------------------------------------------------------------------------------------
+# Versioned network extract import (tehran-synthetic-demo task 1.1/1.3)
+# ----------------------------------------------------------------------------------------------
+class NetworkExtractImportRequest(BaseModel):
+    dataset_id: int | None = None
+    study_area_key: str | None = None
+    dataset_name: str | None = None
+    # Inline document (GeoJSON object, or a GraphML string) *or* a server-side file path.
+    geojson: dict[str, Any] | None = None
+    graphml: str | None = None
+    extract_path: str | None = None
+    epsg_in: int = Field(default=4326, gt=0, le=100000)
+    extract_version: str = Field(default="", max_length=120)
+    source_url: str = Field(default="", max_length=500)
+    source_attribution: str = Field(default="", max_length=500)
+    license: str = Field(default="", max_length=300)
+    snapshot_date: str = Field(default="", max_length=40)
+    boundary_4326: list[float] | None = None
+    buffer_m: float = Field(default=0.0, ge=0.0, le=2000.0)
+    lixel_resolution_m: float = Field(default=25.0, ge=10.0, le=100.0)
+    activate: bool = False
+    actor_role: str = "data_steward"
