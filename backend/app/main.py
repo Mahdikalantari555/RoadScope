@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -58,7 +58,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from .security import install_security
+install_security(app)
 app.include_router(api_router)
+from .api.research_routes import router as research_router
+app.include_router(research_router)
 
 
 if FRONTEND_DIST_DIR.exists():
@@ -68,7 +72,9 @@ if FRONTEND_DIST_DIR.exists():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_spa(full_path: str) -> FileResponse:
+        if full_path.startswith("api/"):
+            raise HTTPException(404, "API route not found.")
         candidate: Path = (FRONTEND_DIST_DIR / full_path).resolve()
-        if full_path and candidate.is_file() and str(candidate).startswith(str(FRONTEND_DIST_DIR.resolve())):
+        if full_path and candidate.is_file() and candidate.is_relative_to(FRONTEND_DIST_DIR.resolve()):
             return FileResponse(str(candidate))
         return FileResponse(str(FRONTEND_DIST_DIR / "index.html"))

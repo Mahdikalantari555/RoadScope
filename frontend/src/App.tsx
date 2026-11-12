@@ -1,3 +1,4 @@
+import { useLocale } from './i18n';
 import React, { useCallback, useEffect, useState } from 'react';
 import { uaiApi } from './api/client';
 import { AnalyticsWorkspace } from './components/AnalyticsWorkspace';
@@ -35,6 +36,7 @@ const INITIAL_FILTERS: CmvFilterState = {
 };
 
 export const App: React.FC = () => {
+  const { t } = useLocale();
   const [darkMode, setDarkMode] = useState<boolean>(true);
   const [meta, setMeta] = useState<PlatformMeta | null>(null);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceMode>('analytics');
@@ -162,7 +164,7 @@ export const App: React.FC = () => {
   if (bootError) {
     return (
       <div className="min-h-screen bg-slate-950 text-rose-300 flex items-center justify-center p-8 font-mono text-sm">
-        Platform Initialization Error: {bootError}
+        {t('error')}: <bdi>{bootError}</bdi>
       </div>
     );
   }
@@ -170,14 +172,14 @@ export const App: React.FC = () => {
   if (!meta) {
     return (
       <div className="min-h-screen bg-slate-950 text-cyan-300 flex items-center justify-center p-8 font-mono text-sm">
-        Initializing RoadScope Spatial Engine (EPSG:25832)...
+        {t('loading')}
       </div>
     );
   }
 
   return (
     <div
-      className={`h-screen w-screen overflow-hidden flex flex-col ${
+      className={`min-h-screen lg:h-screen w-full overflow-auto lg:overflow-hidden flex flex-col ${
         darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'
       }`}
     >

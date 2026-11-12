@@ -9,8 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /workspace
 COPY migrations /workspace/migrations
-COPY backend/requirements.txt /workspace/backend/requirements.txt
-RUN pip install --no-cache-dir -r /workspace/backend/requirements.txt
+COPY backend/requirements.lock /workspace/backend/requirements.lock
+RUN pip install --no-cache-dir -r /workspace/backend/requirements.lock
 
 COPY backend /workspace/backend
 WORKDIR /workspace/backend

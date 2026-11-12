@@ -9,3 +9,7 @@
 - [ ] 1.5 Implement transparent heuristic decision regimes and separate posterior-based EVPI/optional EVSI with explicit actions, loss, costs and horizon.
 - [ ] 1.6 Add localized CURE, uncertainty, decision and assumption views plus export provenance.
 - [ ] 1.7 Test analytical NB/EB, disconnected graphs, zero counts, fit failure, posterior calibration, segmentation sensitivity and decision-value invariants.
+
+## Implementation evidence
+
+See [the per-change implementation ledger](../../../docs/IMPLEMENTATION_STATUS.md) for delivered primitives, tests and outstanding acceptance work. Partial sub-tasks are not marked complete and this change is not archived.

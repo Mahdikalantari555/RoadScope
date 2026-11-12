@@ -40,3 +40,9 @@
 .maplibregl-popup-tip {
   display: none !important;
 }
+
+/* Bidirectional scientific values retain their original ordering. */
+bdi, .font-mono { unicode-bidi: isolate; }
+:focus-visible { outline: 2px solid #22d3ee; outline-offset: 3px; }
+dialog::backdrop { background: rgb(2 6 23 / .75); }
+[dir="rtl"] body { font-family: Tahoma, Arial, sans-serif; }

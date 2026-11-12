@@ -1,48 +1,23 @@
 services:
-  spatial-db:
-    image: postgis/postgis:16-3.4
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${UAI_DB_NAME:-uai_spatial}
-      POSTGRES_USER: ${UAI_DB_USER:-uai_app}
-      POSTGRES_PASSWORD: ${UAI_DB_PASSWORD:?Set UAI_DB_PASSWORD in .env}
-    volumes:
-      - uai_pgdata:/var/lib/postgresql/data
-      - ./migrations/001_postgis_schema.sql:/docker-entrypoint-initdb.d/001_postgis_schema.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
     environment:
-      UAI_SQLITE_PATH: /data/uai.sqlite
-      UAI_CANONICAL_EPSG: "25832"
-      UAI_WEB_EPSG: "4326"
-      UAI_DEFAULT_SEED: "42"
+      ROADSCOPE_SQLITE_PATH: /data/uai.sqlite
+      ROADSCOPE_DEMO_MODE: ${ROADSCOPE_DEMO_MODE:-false}
+      ROADSCOPE_API_TOKENS: ${ROADSCOPE_API_TOKENS:-{}}
     volumes:
-      - uai_sqlite_data:/data
-    depends_on:
-      spatial-db:
-        condition: service_healthy
+      - roadscope_data:/data
     ports:
       - "${UAI_API_PORT:-8000}:8000"
-
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    build: ./frontend
     restart: unless-stopped
-    depends_on:
-      - backend
+    depends_on: [backend]
     ports:
       - "${UAI_WEB_PORT:-8080}:80"
-
 volumes:
-  uai_pgdata:
-  uai_sqlite_data:
+  roadscope_data:
+    name: ${ROADSCOPE_DATA_VOLUME:-roadscope_uai_sqlite_data}

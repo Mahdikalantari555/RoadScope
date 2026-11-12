@@ -8,13 +8,17 @@ import type {
   SnapCandidate,
 } from '../types/uai';
 
+let apiToken = '';
+export function setApiToken(token: string) { apiToken = token; }
+
 async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, {
+    ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
       ...(options?.headers || {}),
     },
-    ...options,
   });
   if (!res.ok) {
     let errMsg = `HTTP ${res.status}`;

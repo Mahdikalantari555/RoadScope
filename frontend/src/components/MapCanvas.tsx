@@ -1,5 +1,6 @@
+import { useLocale } from '../i18n';
 import React, { useEffect, useRef, useState } from 'react';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import {
   BoxSelect,
   Crosshair,
@@ -98,6 +99,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   vgiDraftOverlay,
   flyToTarget,
 }) => {
+  const { t } = useLocale();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
@@ -1089,9 +1091,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       {/* Fallback SVG Vector Canvas if WebGL context unavailable */}
       {webglError && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-300 p-6 text-center">
-          <p className="text-sm font-mono text-amber-400 mb-2">Cartographic Vector Fallback Active ({webglError})</p>
+          <p className="text-sm font-mono text-amber-400 mb-2">{t('noWebgl')}</p>
           <p className="text-xs text-slate-400 max-w-md">
-            All spatial queries, NKDE, Gi*, N-DBSCAN, and Empirical Bayes computations are active via REST/GeoJSON API.
+            <bdi>{webglError}</bdi>
           </p>
         </div>
       )}

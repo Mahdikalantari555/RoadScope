@@ -12,7 +12,7 @@ RoadScope is the new name for the Urban Accident Intelligence (UAI) research pla
 
 ---
 
-> **Research prototype:** the current backend uses SQLite, even though Compose also starts PostGIS. Role strings supplied by clients are not secure authentication. Do not deploy with sensitive data or expose privileged operations without server-side authentication and authorization.
+> **Research prototype, partial OpenSpec implementation:** SQLite is the supported database. Mutations now use server-side bearer identities by default; persona selection does not authenticate. Legacy read APIs remain public, so use synthetic data in a private deployment only. See [implementation status](docs/IMPLEMENTATION_STATUS.md) and [operations, backup and recovery](docs/OPERATIONS.md).
 
 ## Core GIScience & Geomatics Capabilities
 
@@ -44,11 +44,21 @@ docker compose up --build
 ### Local Sandbox Execution & Automated Test Suite
 ```bash
 # Run spatial & statistical verification suite
-PYTHONPATH=backend pytest -v backend/tests/test_platform.py
+python -m venv .venv
+.venv/bin/pip install -r backend/requirements.lock
+PYTHONPATH=backend .venv/bin/python -m pytest -v backend/tests
 
 # Build production WebGL SPA bundle
-cd frontend && npm run build
+cd frontend && npm ci && npm run build
 
 # Launch unified FastAPI + SpatiaLite/R*Tree server
-cd ../backend && uvicorn app.main:app --host 0.0.0.0 --port 8000
+cd .. && PYTHONPATH=backend .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+## OpenSpec delivery status
+
+The ten proposals are **not all complete**. This increment adds security, migration,
+localization scaffolding and tested numerical research components; advanced
+posterior models and full evaluation workflows remain gated. The API exposes exact
+availability at `/api/v1/research/capabilities`. See the
+[per-change ledger](docs/IMPLEMENTATION_STATUS.md) before interpreting results.

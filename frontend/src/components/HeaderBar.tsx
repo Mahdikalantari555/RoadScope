@@ -1,4 +1,6 @@
 import React from 'react';
+import { useLocale } from '../i18n';
+import { ResearchAccess } from './ResearchAccess';
 import {
   Activity,
   Compass,
@@ -48,6 +50,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   darkMode,
   onToggleTheme,
 }) => {
+  const { t, locale, setLocale } = useLocale();
   return (
     <header
       className={`border-b px-3 py-2 flex flex-wrap items-center justify-between gap-2 select-none ${
@@ -68,7 +71,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             </span>
             {activeDataset.is_synthetic && (
               <span className="px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                Synthetic · Seed {activeDataset.random_seed}
+                {t('synthetic')} <bdi>{new Intl.NumberFormat(locale).format(activeDataset.random_seed)}</bdi>
               </span>
             )}
             <span
@@ -86,12 +89,13 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
 
       {/* Center: 6 Scientific Workspaces */}
       <nav className="flex items-center gap-1 flex-wrap">
-        {WORKSPACE_TABS.map((t) => {
-          const active = activeWorkspace === t.mode;
+        {WORKSPACE_TABS.map((tab) => {
+          const active = activeWorkspace === tab.mode;
           return (
             <button
-              key={t.mode}
-              onClick={() => onSelectWorkspace(t.mode)}
+              key={tab.mode}
+              onClick={() => onSelectWorkspace(tab.mode)}
+              aria-pressed={active}
               className={`px-2.5 py-1.5 rounded text-xs font-medium transition-all flex items-center gap-1.5 border ${
                 active
                   ? darkMode
@@ -102,14 +106,14 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
                   : 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200'
               }`}
             >
-              {t.icon}
-              <span>{t.label}</span>
+              {tab.icon}
+              <span>{t(tab.mode)}</span>
               <span
                 className={`hidden 2xl:inline text-[10px] font-mono ${
                   active ? (darkMode ? 'text-cyan-300/80' : 'text-cyan-100') : 'opacity-60'
                 }`}
               >
-                · {t.short}
+                · {tab.short}
               </span>
             </button>
           );
@@ -117,15 +121,20 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
       </nav>
 
       {/* Right: Dataset Selector + Persona RBAC + Theme Toggle */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <select aria-label={t('language')} value={locale} onChange={e => setLocale(e.target.value as 'en' | 'fa')} className="bg-slate-900 text-white border rounded p-1 text-xs">
+          <option value="en">English</option><option value="fa">فارسی</option>
+        </select>
+        <ResearchAccess />
         <div
           className={`flex items-center gap-1 px-2 py-1 rounded border text-xs ${
             darkMode ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-300'
           }`}
-          title="Active Spatial Dataset"
+          title={t('dataset')}
         >
           <Database className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
           <select
+            aria-label={t('dataset')}
             value={activeDataset.id}
             onChange={(e) => onSwitchDataset(Number(e.target.value))}
             className={`bg-transparent text-xs font-mono max-w-[190px] truncate focus:outline-none ${
@@ -144,10 +153,11 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           className={`flex items-center gap-1 px-2 py-1 rounded border text-xs ${
             darkMode ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-300'
           }`}
-          title="Active Persona & Role-Based Access Control (RBAC)"
+          title={t('persona')}
         >
           <UserCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
           <select
+            aria-label={t('persona')}
             value={activeRole}
             onChange={(e) => onSwitchRole(e.target.value as PersonaRole)}
             className={`bg-transparent text-xs font-mono max-w-[165px] truncate focus:outline-none ${
@@ -164,7 +174,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
 
         <button
           onClick={onToggleTheme}
-          title={darkMode ? 'Switch to Light Publication Cartography Theme' : 'Switch to Dark Intelligence Terminal Theme'}
+          title={t('theme')} aria-label={t('theme')}
           className={`p-1.5 rounded border transition-colors ${
             darkMode
               ? 'bg-slate-900 border-slate-800 text-amber-300 hover:bg-slate-800'

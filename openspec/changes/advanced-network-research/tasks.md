@@ -18,3 +18,7 @@
 - [ ] 3.1 Add resource limits, versioned research job/API contracts, provenance and localized Persian/English results, warnings and unavailable states.
 - [ ] 3.2 Evaluate known synthetic truth, calibration, multiple seeds and temporal holdouts; report failures, uncertainty, runtime and negative results.
 - [ ] 3.3 Document environment, offline/privacy behavior, input requirements, rollback and model limitations; add automated regression and access-control tests.
+
+## Implementation evidence
+
+See [the per-change implementation ledger](../../../docs/IMPLEMENTATION_STATUS.md) for delivered primitives, tests and outstanding acceptance work. Partial sub-tasks are not marked complete and this change is not archived.

@@ -51,6 +51,12 @@ from ..services.stewardship import (
     validate_metric_bounds,
 )
 
+def _trusted_role(legacy: str) -> str:
+    from ..security import identity, demo_enabled
+    principal = identity.get()
+    return legacy if demo_enabled() else (principal.role if principal else "anonymous")
+
+
 router = APIRouter(prefix="/api/v1")
 
 
@@ -152,7 +158,7 @@ def generate_simulation_dataset(req: SimulationRequest) -> dict[str, Any]:
                 vgi_false_alarm_count=req.vgi_false_alarm_count,
                 study_period_years=req.study_period_years,
                 activate_dataset=True,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -242,7 +248,7 @@ def submit_vgi_endpoint(req: CitizenReportSubmitRequest) -> dict[str, Any]:
                 narrative=req.narrative,
                 attachment_filenames=req.attachment_filenames,
                 selected_segment_id=req.selected_segment_id,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -257,7 +263,7 @@ def corroborate_vgi_endpoint(accident_id: int, req: CorroborateRequest) -> dict[
                 target_accident_id=accident_id,
                 witness_notes=req.witness_notes,
                 observational_radius_m=req.observational_radius_m,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -335,7 +341,7 @@ def steward_review_endpoint(req: StewardReviewRequest) -> dict[str, Any]:
                 override_offset_m=req.override_offset_m,
                 override_severity_code=req.override_severity_code,
                 review_notes=req.review_notes,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -353,7 +359,7 @@ def steward_merge_endpoint(req: MergeDuplicateClusterRequest) -> dict[str, Any]:
                 duplicate_ids=req.duplicate_ids,
                 verify_canonical=req.verify_canonical,
                 review_notes=req.review_notes,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -375,7 +381,7 @@ def lab_nkde_endpoint(req: NkdeRequest) -> dict[str, Any]:
                 equal_split_mass_conserving=req.equal_split_mass_conserving,
                 include_unverified_vgi=req.include_unverified_vgi,
                 top_hotspot_pct=req.top_hotspot_pct,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -396,7 +402,7 @@ def lab_autocorrelation_endpoint(req: NetworkAutocorrelationRequest) -> dict[str
                 attribute_mode=req.attribute_mode,
                 include_unverified_vgi=req.include_unverified_vgi,
                 random_seed=req.random_seed,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -413,7 +419,7 @@ def lab_ndbscan_endpoint(req: NetworkDbscanRequest) -> dict[str, Any]:
                 eps_net_m=req.eps_net_m,
                 min_samples=req.min_samples,
                 include_unverified_vgi=req.include_unverified_vgi,
-                actor_role=req.actor_role,
+                actor_role=_trusted_role(req.actor_role),
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

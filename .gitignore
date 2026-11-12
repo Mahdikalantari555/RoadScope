@@ -17,3 +17,11 @@ __pycache__/
 .config/
 .sudo_as_admin_successful
 .DS_Store
+
+# Runtime data, backups and reproducible build outputs
+*.sqlite
+*.sqlite-*
+*.sqlite.bak
+frontend/static_bundle/
+*.tsbuildinfo
+*.sqlite.*.bak

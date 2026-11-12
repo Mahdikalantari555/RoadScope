@@ -8,3 +8,7 @@
 - [ ] 1.4 Implement validated bivariate Poisson-lognormal model with explicit priors, offsets and uncertainty diagnostics.
 - [ ] 1.5 Expose localized comparison, uncertainty, coverage and unavailable states; separate association from causation.
 - [ ] 1.6 Test privacy, zero-crash vs zero-coverage, model convergence, calibration and held-out improvement over crash-only and exposure baselines.
+
+## Implementation evidence
+
+See [the per-change implementation ledger](../../../docs/IMPLEMENTATION_STATUS.md) for delivered primitives, tests and outstanding acceptance work. Partial sub-tasks are not marked complete and this change is not archived.

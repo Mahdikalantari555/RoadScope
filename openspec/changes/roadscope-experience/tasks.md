@@ -8,3 +8,7 @@
 - [ ] 1.4 Provide logical RTL styling, bidirectional isolation for formulas/coordinates, themes and unavailable-WebGL, loading, empty and error states.
 - [ ] 1.5 Connect scientific controls only to implemented endpoints; label synthetic data and assumptions in both languages.
 - [ ] 1.6 Automate catalog completeness, RTL/LTR, keyboard, responsive and end-to-end regression tests across all six workspaces.
+
+## Implementation evidence
+
+See [the per-change implementation ledger](../../../docs/IMPLEMENTATION_STATUS.md) for delivered primitives, tests and outstanding acceptance work. Partial sub-tasks are not marked complete and this change is not archived.

@@ -47,9 +47,22 @@ def db_session(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
 
 
 def init_schema_and_reference_data(db_path: Path | None = None) -> None:
+    target = db_path or SQLITE_DB_PATH
+    if target.exists():
+        from .migrations import backup_database
+        with get_connection(target) as check:
+            has_versions = check.execute("SELECT 1 FROM sqlite_master WHERE name='schema_migrations'").fetchone()
+            applied = {r[0] for r in check.execute('SELECT version FROM schema_migrations')} if has_versions else set()
+        pending = [p for p in sorted(MIGRATIONS_DIR.glob('[0-9][0-9][0-9]_*.sql')) if int(p.name[:3]) >= 3 and p.name not in applied]
+        if pending:
+            backup = target.with_name(target.name + '.pre-' + pending[0].stem + '.bak')
+            if not backup.exists():
+                backup_database(target, backup)
     schema_sql = (MIGRATIONS_DIR / "002_spatialite_schema.sql").read_text(encoding="utf-8")
     with db_session(db_path) as conn:
         conn.executescript(schema_sql)
+        from .migrations import apply_migrations
+        apply_migrations(conn)
         now = utc_now_iso()
 
         # Seed the 6 persona users
@@ -210,6 +223,10 @@ def log_audit_event(
     before_state: dict[str, Any] | None = None,
     after_state: dict[str, Any] | None = None,
 ) -> None:
+    from .security import identity
+    principal = identity.get()
+    if principal is not None:
+        actor_user_id, actor_role = principal.user_id, principal.role
     conn.execute(
         """
         INSERT INTO audit_logs

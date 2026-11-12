@@ -8,3 +8,7 @@
 - [ ] 1.4 Implement appropriate count-model uncertainty propagation or multiple imputation for EB/BYM2; record random seed and between-imputation variance.
 - [ ] 1.5 Expose matching, support and correction diagnostics in localized QA/API/exports and retain raw observations.
 - [ ] 1.6 Test 52/48 mass, zero/missing candidates, no reference, propensity overlap failure, duplicate merge and multi-seed bias/variance calibration.
+
+## Implementation evidence
+
+See [the per-change implementation ledger](../../../docs/IMPLEMENTATION_STATUS.md) for delivered primitives, tests and outstanding acceptance work. Partial sub-tasks are not marked complete and this change is not archived.

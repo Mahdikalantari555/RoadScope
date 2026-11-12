@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 def test_client() -> TestClient:
     tmp_dir = tempfile.mkdtemp(prefix="uai_test_")
     db_file = Path(tmp_dir) / "test_uai.sqlite"
+    os.environ["ROADSCOPE_DEMO_MODE"] = "true"
     os.environ["UAI_SQLITE_PATH"] = str(db_file)
 
     # Reload config/db modules against isolated test DB

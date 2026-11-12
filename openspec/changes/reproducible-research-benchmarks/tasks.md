@@ -10,3 +10,7 @@
 - [ ] 1.6 Specify gated optional Voronoi/inhomogeneous second-order, joint link–node, ST-GNN, trajectory HMM and privacy-reviewed text baselines; implement only with required datasets and comparison protocols.
 - [ ] 1.7 Verify cited claims/parameters against primary sources and publish negative results, dataset limitations and exact reproduction instructions.
 - [ ] 1.8 Add localized plots and tests for leakage, ties, unequal lengths, no events, fixed seeds, splits and manifest replay.
+
+## Implementation evidence
+
+See [the per-change implementation ledger](../../../docs/IMPLEMENTATION_STATUS.md) for delivered primitives, tests and outstanding acceptance work. Partial sub-tasks are not marked complete and this change is not archived.

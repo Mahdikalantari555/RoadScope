@@ -8,3 +8,7 @@
 - [ ] 1.4 Add versioned job/API, localized visualization and exports separating background and secondary probabilities.
 - [ ] 1.5 Test zero excitation reduces to background, upstream-only reachability, stable rate, reproducibility, termination and probability bounds.
 - [ ] 1.6 Evaluate multi-seed parent/secondary calibration against synthetic labels and a non-Hawkes null; document confounding.
+
+## Implementation evidence
+
+See [the per-change implementation ledger](../../../docs/IMPLEMENTATION_STATUS.md) for delivered primitives, tests and outstanding acceptance work. Partial sub-tasks are not marked complete and this change is not archived.

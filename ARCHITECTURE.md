@@ -1,3 +1,5 @@
+> Current deployment decisions and limitations supersede historical design claims below: see [operations](docs/OPERATIONS.md) and [implementation ledger](docs/IMPLEMENTATION_STATUS.md). SQLite is the only supported adapter.
+
 > **Current implementation note:** RoadScope currently runs against SQLite in `backend/app/db.py`; the Compose PostGIS service is not connected to the backend. Client-supplied roles are not secure authentication. See [implementation plan](IMPLEMENTATION_PLAN_FA.md) for the migration and security work.
 
 # Urban Accident Intelligence (UAI) Research Platform
