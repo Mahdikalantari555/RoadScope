@@ -18,6 +18,13 @@ __pycache__/
 .sudo_as_admin_successful
 .DS_Store
 
+# Runtime SQLite databases. The default path is a local, regenerable synthetic demo database:
+# the legacy Frankfurt (EPSG:25832) one is deliberately not shipped, so a first run seeds the
+# configured demo study area (Tehran) instead of surprising an operator with another city.
+data/*.sqlite
+data/*.sqlite-*
+data/backups/
+
 # Runtime SQLite journals, backups, and reproducible frontend build artifacts
 *.sqlite-*
 *.sqlite.bak
