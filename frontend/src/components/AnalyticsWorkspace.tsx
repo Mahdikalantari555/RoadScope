@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Calendar, FilterX, Flame, Layers3, Navigation } from 'lucide-react';
 import type { CmvFilterState, CmvStatePayload, NetworkLayersPayload } from '../types/uai';
 import { SegmentDetails } from './SegmentDetails';
@@ -31,11 +31,19 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
   const copy = analyticsText(language);
   const days = dayLabels(language);
   const n = (value: number) => formatNumber(language, value);
-  const [brushStartIdx, setBrushStartIdx] = useState<number | null>(null);
+  const [brushStartWeek, setBrushStartWeek] = useState<string | null>(null);
+  const filterKey = JSON.stringify(filters);
+
+  // A half-finished selection belongs to the current query, not the next dataset or filter.
+  useEffect(() => { setBrushStartWeek(null); }, [cmvData, filterKey]);
+  const resetFilters = () => {
+    setBrushStartWeek(null);
+    onResetAllFilters();
+  };
 
   if (!cmvData) {
     return <div className="h-full overflow-y-auto p-3 space-y-3 text-xs">
-      <ActiveFilters filters={filters} onUpdate={onUpdateFilters} onReset={onResetAllFilters} />
+      <ActiveFilters filters={filters} onUpdate={onUpdateFilters} onReset={resetFilters} />
       <SegmentDetails segmentId={filters.segment_id} network={networkLayers} onClose={() => onUpdateFilters({ segment_id: null })} />
       {loading && <div role="status" className="p-3 font-mono text-slate-400">{copy.loading}</div>}
     </div>;
@@ -81,16 +89,17 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
   };
 
   const handleWeekClick = (idx: number) => {
-    if (brushStartIdx === null) {
-      setBrushStartIdx(idx);
+    const startIdx = weekly_series.findIndex(week => week.week_start === brushStartWeek);
+    if (startIdx < 0) {
+      setBrushStartWeek(weekly_series[idx].week_start);
     } else {
-      const i0 = Math.min(brushStartIdx, idx);
-      const i1 = Math.max(brushStartIdx, idx);
+      const i0 = Math.min(startIdx, idx);
+      const i1 = Math.max(startIdx, idx);
       const sUtc = `${weekly_series[i0].week_start}T00:00:00Z`;
       const eDate = new Date(`${weekly_series[i1].week_start}T00:00:00Z`);
       eDate.setUTCDate(eDate.getUTCDate() + 7);
       onUpdateFilters({ start_utc: sUtc, end_utc: eDate.toISOString().slice(0, 19) + 'Z' });
-      setBrushStartIdx(null);
+      setBrushStartWeek(null);
     }
   };
 
@@ -129,7 +138,7 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
           {hasAnyFilter && (
             <button
               type="button"
-              onClick={onResetAllFilters}
+              onClick={resetFilters}
               className="px-2 py-1 rounded bg-rose-500/20 border border-rose-500/50 text-rose-300 hover:bg-rose-500/30 flex items-center gap-1 text-[11px] font-mono"
             >
               <FilterX className="w-3 h-3" /> {copy.reset}
@@ -138,7 +147,7 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
         </div>
       </div>
 
-      <ActiveFilters filters={filters} onUpdate={onUpdateFilters} onReset={onResetAllFilters} />
+      <ActiveFilters filters={filters} onUpdate={onUpdateFilters} onReset={resetFilters} />
       <SegmentDetails segmentId={filters.segment_id} network={networkLayers} onClose={() => onUpdateFilters({ segment_id: null })} />
 
       {/* KPI Strip */}
@@ -177,7 +186,7 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
             {copy.timeline}
           </span>
           <span className="text-[10px] font-mono opacity-75">
-            {brushStartIdx !== null ? (
+            {brushStartWeek !== null ? (
               copy.chooseEnd
             ) : filters.start_utc ? (
               <bdi dir="ltr">
@@ -188,11 +197,16 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
             )}
           </span>
         </div>
+        {brushStartWeek !== null && (
+          <button type="button" onClick={() => setBrushStartWeek(null)} className="underline text-xs mb-1">
+            {copy.cancelWeekSelection}
+          </button>
+        )}
         <div dir="ltr" className="h-24 flex items-end gap-[2px] pt-2">
           {weekly_series.map((w, idx) => {
             const totalPct = (w.total_count / maxWeekTotal) * 100;
             const selPct = (w.selected_count / maxWeekTotal) * 100;
-            const isAnchor = brushStartIdx === idx;
+            const isAnchor = brushStartWeek === w.week_start;
             return (
               <button
                 type="button"

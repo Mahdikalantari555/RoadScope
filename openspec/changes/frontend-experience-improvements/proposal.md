@@ -2,7 +2,7 @@
 
 ## Why
 
-RoadScope already has six workspaces, map layers, legends, filters and research controls, but dense interactions and scattered explanations make it hard to understand and present. FrontExamples contain useful interface patterns; they are alternatives, not a shared implementation or proof that all features exist in RoadScope.
+RoadScope already has six workspaces, map layers, legends, filters and research controls, but dense interactions and scattered explanations make it hard to understand and present. The former FrontExamples contained useful interface patterns (see the pinned historical source in `docs/FRONTEND_INTERACTION_INVENTORY.md`); they are alternatives, not a shared implementation or proof that all features exist in RoadScope.
 
 ## What Changes
 

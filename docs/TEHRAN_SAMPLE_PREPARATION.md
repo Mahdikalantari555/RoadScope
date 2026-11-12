@@ -59,5 +59,4 @@ visual street geometries and 100 synthetic points. The GraphML output SHA-256
 for that run was `73b61ace33f7060f6ad1e94990d3e75e28b0592d3770670a8cf678f9404b0c07`;
 GraphML serialization may vary by library version. This bundle remains a
 standalone visualization, not the default or an analysis-ready database.
-Do not set `ROADSCOPE_CANONICAL_EPSG=32639` on the legacy database: initialization
-now rejects it until CRS-aware storage and the simulator are implemented.
+Do not relabel or reproject the legacy database by changing `ROADSCOPE_CANONICAL_EPSG`; existing datasets retain their recorded CRS. The fictional simulator can generate a new EPSG:32639 dataset, but this is not the OSM analytical import and does not validate the candidate road network.

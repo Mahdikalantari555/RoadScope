@@ -1,6 +1,6 @@
 # Frontend interaction inventory and workflow
 
-This inventory compares the checked-in examples with RoadScope, rather than treating an example's UI or API as an implemented capability. It describes the integrated prototype, not approval to process real citizen reports. The current standalone Tehran preview is not the analytical profile.
+This inventory compares the former examples with RoadScope, rather than treating an example's UI or API as an implemented capability. The example source directory was removed from the working tree at the owner's request; the reviewed files remain available in [repository history](https://github.com/Mahdikalantari555/RoadScope/tree/90c15faa11fb13fad83a62172c0f110e70b57212/FrontExamples). File paths in the table are relative to that historical directory. It describes the integrated prototype, not approval to process real citizen reports. The current standalone Tehran preview is not the analytical profile.
 
 | Pattern and evidence in FrontExamples | RoadScope evidence and status | Decision / limitation |
 |---|---|---|
@@ -13,7 +13,7 @@ This inventory compares the checked-in examples with RoadScope, rather than trea
 
 ## Interaction contract
 
-- The filter controls operate on one parent-owned state; clearing a chip must not reset unrelated filters. A reset returns the complete default state, including verification mode. A selected corridor is also the map selection. Week selection uses two points and UTC; the day/hour grid uses UTC.
+- The filter controls operate on one parent-owned state; clearing a chip must not reset unrelated filters. A reset returns the complete default state, including verification mode. A selected corridor is also the map selection. Week selection uses two points and UTC; an unfinished selection can be cancelled and is cleared when the query changes. The day/hour grid uses UTC.
 - While a coordinated query is in flight, old results are removed instead of being labeled as current. A failed request leaves filters visible, shows an error and offers retry. An earlier response cannot override a newer filter or dataset selection. Dataset activation requests are serialized; an activation failure is visible and does not silently change the displayed dataset.
 - Segment detail uses only fields already in the returned network payload, supports a close action and displays missing values. Raw citizen records and example attachment or tracking interfaces must not be introduced until server-side read authorization is specified and tested.
 - The presentation view must retain dataset name, synthetic status, source, attribution, legend and filter context on screen. The preview must distinguish OSM geometry from fictional incidents, including when tiles fail. These are acceptance criteria, not a claim that all profiles already satisfy them.
