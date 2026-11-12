@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Calculator, RefreshCw, ShieldAlert, SlidersHorizontal } from 'lucide-react';
 import { uaiApi } from '../api/client';
 import { useLanguage } from '../i18n';
@@ -12,7 +12,7 @@ interface RiskEbWorkspaceProps {
   overlayMode: MapOverlayMode;
   onChangeOverlay: (mode: MapOverlayMode) => void;
   riskData: RiskEbPayload | null;
-  onRiskDataLoaded: (payload: RiskEbPayload) => void;
+  onRiskDataLoaded: (payload: RiskEbPayload | null) => void;
   onFlyToSegment: (segmentId: number) => void;
 }
 
@@ -33,6 +33,8 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
   const [wGeom, setWGeom] = useState(0.15);
   const [wEnv, setWEnv] = useState(0.15);
   const [loading, setLoading] = useState(false);
+  const [riskError, setRiskError] = useState(false);
+  const riskRequest = useRef(0);
 
   // Posterior EVPI Decision Calculator state
   const [installCostK, setInstallCostK] = useState(45);
@@ -46,7 +48,9 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
   const [advBusy, setAdvBusy] = useState(false);
 
   const recompute = async (eb = wEb, ep = wEpdo, gm = wGeom, ev = wEnv) => {
+    const request = ++riskRequest.current;
     setLoading(true);
+    setRiskError(false);
     try {
       const [res, surr] = await Promise.all([
         uaiApi.evaluateRiskEb({
@@ -58,15 +62,22 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
         }),
         uaiApi.getSurrogates(datasetId).catch(() => null),
       ]);
+      if (request !== riskRequest.current) return;
       onRiskDataLoaded(res);
       setSurrogates(surr);
+    } catch {
+      if (request === riskRequest.current) {
+        onRiskDataLoaded(null);
+        setRiskError(true);
+      }
     } finally {
-      setLoading(false);
+      if (request === riskRequest.current) setLoading(false);
     }
   };
 
   useEffect(() => {
-    recompute();
+    void recompute();
+    return () => { riskRequest.current += 1; };
   }, [datasetId]);
 
   const computeEvpiDecision = async () => {
@@ -171,6 +182,10 @@ export const RiskEbWorkspace: React.FC<RiskEbWorkspaceProps> = ({
         </div>
         {loading && <RefreshCw className="w-4 h-4 animate-spin text-cyan-400" />}
       </div>
+
+      {riskError && <p role="alert" className="rounded border border-amber-500/50 p-3 text-amber-300">
+        {language === 'fa' ? 'ارزیابی ریسک در دسترس نیست؛ ورودی‌ها و اعتبار مدل را بررسی کنید.' : 'Risk evaluation is unavailable; review inputs and model validation.'}
+      </p>}
 
       {/* Multi-Tiered Safety & Risk Map Layer Selector */}
       <div className={cardCls}>

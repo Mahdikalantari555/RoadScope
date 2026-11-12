@@ -55,9 +55,9 @@ def get_network_layers_geojson(
                 "elevation_level": int(r["elevation_level"]),
                 "oneway_direction": r["oneway_direction"],
                 "direction_source": r["direction_source"],
-                "aadt": int(r["obs_aadt"] or r["aadt"] or 8000),
-                "aadt_is_imputed": bool(r["is_imputed"]),
-                "coverage_confidence": round(float(r["coverage_confidence"] or 0.8), 3),
+                "aadt": int(r["obs_aadt"] if r["obs_aadt"] is not None else r["aadt"]) if (r["obs_aadt"] is not None or r["aadt"] is not None) else None,
+                "aadt_is_imputed": bool(r["is_imputed"]) if r["is_imputed"] is not None else None,
+                "coverage_confidence": round(float(r["coverage_confidence"]), 3) if r["coverage_confidence"] is not None else None,
             },
             "geometry": json.loads(r["geojson_4326"]),
         }

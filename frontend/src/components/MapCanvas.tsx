@@ -129,13 +129,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const [showNodes, setShowNodes] = useState(false);
   const [showVgiVectors, setShowVgiVectors] = useState(true);
   const epsg = canonicalEpsg ?? 3857;
+  const epsgRef = useRef(epsg);
+  epsgRef.current = epsg;
   const initialCenter: [number, number] = center4326 ?? [51.389, 35.6892];
   const initialMetric = wgs84ToMetric(initialCenter[0], initialCenter[1], epsg);
   const [cursorCoord, setCursorCoord] = useState<{
     lon: number;
     lat: number;
-    x_m: number;
-    y_m: number;
+    x_m: number | null;
+    y_m: number | null;
     zoom: number;
   }>({
     lon: initialCenter[0],
@@ -144,6 +146,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     y_m: initialMetric.y_m,
     zoom: 12.6,
   });
+
+  useEffect(() => {
+    setCursorCoord(current => ({ ...current, ...wgs84ToMetric(current.lon, current.lat, epsg) }));
+  }, [epsg]);
 
   /** Fit the camera to the active dataset's network extent (falls back to the study centre). */
   const fitToNetwork = (animate: boolean) => {
@@ -221,7 +227,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-right');
 
       map.on('mousemove', (e) => {
-        const { x_m, y_m } = wgs84ToMetric(e.lngLat.lng, e.lngLat.lat, epsg);
+        const { x_m, y_m } = wgs84ToMetric(e.lngLat.lng, e.lngLat.lat, epsgRef.current);
         setCursorCoord({
           lon: Number(e.lngLat.lng.toFixed(5)),
           lat: Number(e.lngLat.lat.toFixed(5)),
@@ -1606,8 +1612,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           <span className="flex items-center gap-1 text-cyan-400">
             <Crosshair className="w-3 h-3" />
             <bdi dir="ltr">
-              EPSG:{epsg} E {cursorCoord.x_m.toLocaleString('en-US', { minimumFractionDigits: 1 })}m · N{' '}
-              {cursorCoord.y_m.toLocaleString('en-US', { minimumFractionDigits: 1 })}m
+              EPSG:{epsg} E {cursorCoord.x_m?.toLocaleString('en-US', { minimumFractionDigits: 1 }) ?? '—'}m · N{' '}
+              {cursorCoord.y_m?.toLocaleString('en-US', { minimumFractionDigits: 1 }) ?? '—'}m
             </bdi>
           </span>
           <span className="hidden sm:inline">

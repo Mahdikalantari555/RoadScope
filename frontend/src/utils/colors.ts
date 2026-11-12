@@ -1,3 +1,5 @@
+import proj4 from 'proj4';
+
 // Perceptual Colorblind-Safe Palettes & CRS-agnostic Live Coordinate Readout Math
 
 export const VIRIDIS_STOPS: [number, string][] = [
@@ -39,13 +41,16 @@ export const BIVARIATE_3X3: Record<string, string> = {
   '3-3': '#2a5a5b',
 };
 
-/**
- * WGS84 -> Web Mercator (EPSG:3857) forward projection, the platform's default canonical
- * metric CRS. Any study area may declare another projected CRS; for those, the backend
- * remains the authority on metric coordinates (see `POST /api/v1/crs/project`). This local
- * projection only powers the zero-latency cursor readout.
- */
-export function wgs84ToMetric(lonDeg: number, latDeg: number, epsg = 3857): { x_m: number; y_m: number } {
+// Supported local CRS definitions. Unsupported EPSG codes must never be labelled with
+// Web Mercator coordinates; the API remains authoritative for arbitrary projections.
+proj4.defs('EPSG:25832', '+proj=utm +zone=32 +ellps=GRS80 +units=m +no_defs');
+proj4.defs('EPSG:32639', '+proj=utm +zone=39 +datum=WGS84 +units=m +no_defs');
+
+type MetricCoord = { x_m: number | null; y_m: number | null };
+export function wgs84ToMetric(lonDeg: number, latDeg: number, epsg = 3857): MetricCoord {
+  if (!Number.isFinite(lonDeg) || !Number.isFinite(latDeg) || lonDeg < -180 || lonDeg > 180 || latDeg < -90 || latDeg > 90) {
+    return { x_m: null, y_m: null };
+  }
   if (epsg === 3857 || epsg === 900913) {
     const R = 6378137.0;
     const clampedLat = Math.max(-85.05112878, Math.min(85.05112878, latDeg));
@@ -53,11 +58,14 @@ export function wgs84ToMetric(lonDeg: number, latDeg: number, epsg = 3857): { x_
     const y = R * Math.log(Math.tan(Math.PI / 4 + (clampedLat * Math.PI) / 360.0));
     return { x_m: Math.round(x * 10) / 10, y_m: Math.round(y * 10) / 10 };
   }
-  // Unsupported local projection: fall back to Web Mercator for the readout only.
-  return wgs84ToMetric(lonDeg, latDeg, 3857);
+  if (epsg !== 25832 && epsg !== 32639) return { x_m: null, y_m: null };
+  const [x, y] = proj4('EPSG:4326', `EPSG:${epsg}`, [lonDeg, latDeg]);
+  return Number.isFinite(x) && Number.isFinite(y)
+    ? { x_m: Math.round(x * 10) / 10, y_m: Math.round(y * 10) / 10 }
+    : { x_m: null, y_m: null };
 }
 
-/** @deprecated kept for backwards compatibility; prefer `wgs84ToMetric(lon, lat, epsg)`. */
-export function wgs84ToUtm32N(lonDeg: number, latDeg: number): { x_m: number; y_m: number } {
-  return wgs84ToMetric(lonDeg, latDeg, 3857);
+/** @deprecated use the CRS-aware function; legacy helper is specifically UTM zone 32N. */
+export function wgs84ToUtm32N(lonDeg: number, latDeg: number): MetricCoord {
+  return wgs84ToMetric(lonDeg, latDeg, 25832);
 }

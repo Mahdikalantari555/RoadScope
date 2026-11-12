@@ -312,3 +312,29 @@ def test_real_dataset_rejects_citizen_submissions(client: TestClient) -> None:
     assert response.status_code == 403
     with db_session() as conn:
         assert conn.execute('SELECT COUNT(*) FROM accidents').fetchone()[0] == before
+
+
+def test_import_does_not_invent_traffic_and_risk_is_gated(client: TestClient) -> None:
+    from app.db import db_session
+    imported = client.post('/api/v1/ingest/network', json={'geojson': AMSTERDAM_LINE, 'activate': False})
+    assert imported.status_code == 200, imported.text
+    ds = imported.json()['dataset_id']
+    with db_session() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM traffic_observations WHERE dataset_id=?', (ds,)).fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM road_segments WHERE dataset_id=? AND aadt IS NOT NULL', (ds,)).fetchone()[0] == 0
+    layers = client.get(f'/api/v1/network/layers?dataset_id={ds}&include_lixels=false').json()
+    assert all(f['properties']['aadt'] is None and f['properties']['coverage_confidence'] is None
+               for f in layers['segments_geojson']['features'])
+    response = client.post('/api/v1/risk/evaluate', json={'dataset_id': ds})
+    assert response.status_code == 422
+    assert 'unavailable' in response.text
+
+
+def test_missing_exposure_gates_synthetic_risk(client: TestClient) -> None:
+    from app.db import db_session
+    ds = client.get('/api/v1/meta').json()['active_dataset']['id']
+    with db_session() as conn:
+        conn.execute('DELETE FROM traffic_observations WHERE segment_id=(SELECT id FROM road_segments WHERE dataset_id=? LIMIT 1)', (ds,))
+    response = client.post('/api/v1/risk/evaluate', json={'dataset_id': ds})
+    assert response.status_code == 422
+    assert 'exposure' in response.text

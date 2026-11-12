@@ -424,10 +424,11 @@ def persist_network_spec(
         u_id = node_code_to_id[e["u_code"]]
         v_id = node_code_to_id[e["v_code"]]
 
-        # Partial AADT sensor missingness/imputation keeps the epistemic-uncertainty layers
-        # empirically contrasted instead of assuming complete exposure coverage.
-        has_direct_sensor = not (e["road_class"] in ("local_street", "collector") and (idx % 5 == 0))
-        aadt_val = int(float(e.get("aadt") or 8000) * rng.uniform(0.94, 1.06))
+        # Only the fictional generator may synthesize traffic. Imported geometry does not
+        # imply measured exposure, even when other source attributes look realistic.
+        simulated_traffic = source == "seeded_demo"
+        has_direct_sensor = simulated_traffic and not (e["road_class"] in ("local_street", "collector") and (idx % 5 == 0))
+        aadt_val = int(float(e.get("aadt") or 8000) * rng.uniform(0.94, 1.06)) if simulated_traffic else None
         stored_seg_aadt = aadt_val if has_direct_sensor else None
 
         cur = conn.execute(
@@ -465,28 +466,29 @@ def persist_network_spec(
         )
         seg_id = int(cur.lastrowid)
 
-        mvkt_annual = round((aadt_val * 365.0 * (length_m / 1000.0)) / 1_000_000.0, 5)
-        cov_conf = round(float(rng.uniform(0.88, 0.99)) if has_direct_sensor else float(rng.uniform(0.42, 0.58)), 3)
-        conn.execute(
-            """
-            INSERT INTO traffic_observations
-            (dataset_id, segment_id, observation_period, aadt_vehicles_per_day, peak_hour_volume,
-             avg_speed_kmh, heavy_vehicle_pct, exposure_mvkt_annual, coverage_confidence, is_imputed, observed_at_utc)
-            VALUES (?, ?, 'Annual', ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                dataset_id,
-                seg_id,
-                aadt_val,
-                int(aadt_val * 0.088),
-                round(float(e["speed_limit_kmh"]) * float(rng.uniform(0.76, 0.94)), 1),
-                round(float(rng.uniform(3.0, 14.5)) if e["road_class"] != "local_street" else 1.8, 1),
-                mvkt_annual,
-                cov_conf,
-                0 if has_direct_sensor else 1,
-                now,
-            ),
-        )
+        if simulated_traffic and aadt_val is not None:
+            mvkt_annual = round((aadt_val * 365.0 * (length_m / 1000.0)) / 1_000_000.0, 5)
+            cov_conf = round(float(rng.uniform(0.88, 0.99)) if has_direct_sensor else float(rng.uniform(0.42, 0.58)), 3)
+            conn.execute(
+                """
+                INSERT INTO traffic_observations
+                (dataset_id, segment_id, observation_period, aadt_vehicles_per_day, peak_hour_volume,
+                 avg_speed_kmh, heavy_vehicle_pct, exposure_mvkt_annual, coverage_confidence, is_imputed, observed_at_utc)
+                VALUES (?, ?, 'Annual', ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    dataset_id,
+                    seg_id,
+                    aadt_val,
+                    int(aadt_val * 0.088),
+                    round(float(e["speed_limit_kmh"]) * float(rng.uniform(0.76, 0.94)), 1),
+                    round(float(rng.uniform(3.0, 14.5)) if e["road_class"] != "local_street" else 1.8, 1),
+                    mvkt_annual,
+                    cov_conf,
+                    0 if has_direct_sensor else 1,
+                    now,
+                ),
+            )
 
         g_nodes.add_edge(u_id, v_id, weight=length_m, segment_id=seg_id)
         segment_records.append(

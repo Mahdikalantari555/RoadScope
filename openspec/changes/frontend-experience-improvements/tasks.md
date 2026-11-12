@@ -1,8 +1,8 @@
 # Tasks
 
 ## 1. Inventory and design
-- [ ] 1.1 Inventory relevant FrontExamples and current workspaces/API flows with evidence; record existing, partial, absent and unsupported interactions.
-- [ ] 1.2 Define interaction and accessibility design for methods, feature details, filter summary, supported linked charts and presentation mode; preserve current behavior.
+- [x] 1.1 Inventory relevant FrontExamples and current workspaces/API flows with evidence; record existing, partial, absent and unsupported interactions.
+- [x] 1.2 Define interaction and accessibility design for methods, feature details, filter summary, supported linked charts and presentation mode; preserve current behavior.
 - [ ] 1.3 Agree shared presentation contract with `tehran-synthetic-demo`, including dataset provenance, attribution and screenshots; keep profiles independent.
 
 ## 2. Implementation

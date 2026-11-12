@@ -24,6 +24,7 @@ interface HeaderBarProps {
   activeDataset: DatasetSource;
   datasets: DatasetSource[];
   onSwitchDataset: (id: number) => void;
+  datasetSwitching?: boolean;
   activeRole: PersonaRole;
   personas: PersonaUser[];
   onSwitchRole: (role: PersonaRole) => void;
@@ -46,6 +47,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   activeDataset,
   datasets,
   onSwitchDataset,
+  datasetSwitching = false,
   activeRole,
   personas,
   onSwitchRole,
@@ -139,6 +141,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             aria-label={t('dataset')}
             dir="ltr"
             value={activeDataset.id}
+            disabled={datasetSwitching}
             onChange={(e) => onSwitchDataset(Number(e.target.value))}
             className={`bg-transparent text-xs font-mono max-w-[180px] truncate focus:outline-none ${
               darkMode ? 'text-slate-200' : 'text-slate-800'

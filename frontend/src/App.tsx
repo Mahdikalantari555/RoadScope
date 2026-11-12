@@ -11,9 +11,9 @@ import { SimulatorWorkspace } from './components/SimulatorWorkspace';
 import { SpatialLabWorkspace } from './components/SpatialLabWorkspace';
 import { StewardWorkspace } from './components/StewardWorkspace';
 import { useLanguage } from './i18n';
+import { useCmvQuery } from './hooks/useCmvQuery';
 import type {
   CmvFilterState,
-  CmvStatePayload,
   MapInteractionTool,
   MapOverlayMode,
   NetworkLayersPayload,
@@ -50,9 +50,7 @@ export const App: React.FC = () => {
 
   const [networkLayers, setNetworkLayers] = useState<NetworkLayersPayload | null>(null);
   const [filters, setFilters] = useState<CmvFilterState>(INITIAL_FILTERS);
-  const [cmvData, setCmvData] = useState<CmvStatePayload | null>(null);
-  const [cmvError, setCmvError] = useState<string | null>(null);
-  const cmvRequest = useRef(0);
+  const { data: cmvData, error: cmvError, status: cmvStatus, refresh: refreshCmv } = useCmvQuery(meta?.active_dataset?.id, filters);
 
   // Cached analytical results across workspaces
   const [nkdeResult, setNkdeResult] = useState<Record<string, any> | null>(null);
@@ -72,6 +70,10 @@ export const App: React.FC = () => {
   } | null>(null);
   const [flyToTarget, setFlyToTarget] = useState<{ lon: number; lat: number; zoom?: number; ts: number } | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [datasetSwitching, setDatasetSwitching] = useState(false);
+  const [datasetError, setDatasetError] = useState<string | null>(null);
+  const datasetSwitchInFlight = useRef(false);
+  const contextRequest = useRef(0);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -80,6 +82,7 @@ export const App: React.FC = () => {
   }, [darkMode]);
 
   const loadDatasetContext = useCallback(async (dsId?: number) => {
+    const request = ++contextRequest.current;
     try {
       const m = await uaiApi.getMeta();
       const targetId = dsId ?? m.active_dataset.id;
@@ -91,8 +94,9 @@ export const App: React.FC = () => {
           w_epdo_severity: 0.3,
           w_geometric_hazard: 0.15,
           w_environmental_cov: 0.15,
-        }),
+        }).catch(() => null),
       ]);
+      if (request !== contextRequest.current) return;
       setMeta(m);
       setNetworkLayers(net);
       setRiskData(eb);
@@ -102,30 +106,13 @@ export const App: React.FC = () => {
       setGiStarResult(null);
       setNdbscanResult(null);
     } catch (e) {
-      setBootError(e instanceof Error ? e.message : 'Failed to initialize platform metadata');
+      if (request === contextRequest.current) setBootError(e instanceof Error ? e.message : 'Failed to initialize platform metadata');
     }
   }, []);
 
   useEffect(() => {
     loadDatasetContext();
   }, [loadDatasetContext]);
-
-  const refreshCmv = useCallback(async () => {
-    if (!meta?.active_dataset) return;
-    const request = ++cmvRequest.current;
-    setCmvError(null);
-    setCmvData(null);
-    try {
-      const cmv = await uaiApi.queryCmv(meta.active_dataset.id, filters);
-      if (request === cmvRequest.current) setCmvData(cmv);
-    } catch (error) {
-      if (request === cmvRequest.current) setCmvError(error instanceof Error ? error.message : 'Request failed');
-    }
-  }, [meta?.active_dataset?.id, filters]);
-
-  useEffect(() => {
-    refreshCmv();
-  }, [refreshCmv]);
 
   const handleSelectWorkspace = (mode: WorkspaceMode) => {
     setActiveWorkspace(mode);
@@ -156,9 +143,20 @@ export const App: React.FC = () => {
   };
 
   const handleSwitchDataset = async (datasetId: number) => {
-    await uaiApi.activateDataset(datasetId);
-    setFilters(INITIAL_FILTERS);
-    await loadDatasetContext(datasetId);
+    if (datasetSwitchInFlight.current) return;
+    datasetSwitchInFlight.current = true;
+    setDatasetSwitching(true);
+    setDatasetError(null);
+    try {
+      await uaiApi.activateDataset(datasetId);
+      setFilters(INITIAL_FILTERS);
+      await loadDatasetContext(datasetId);
+    } catch (error) {
+      setDatasetError(error instanceof Error ? error.message : 'Dataset switch failed');
+    } finally {
+      datasetSwitchInFlight.current = false;
+      setDatasetSwitching(false);
+    }
   };
 
   const handleFlyToSegment = (segmentId: number) => {
@@ -209,6 +207,7 @@ export const App: React.FC = () => {
         activeDataset={meta.active_dataset}
         datasets={meta.datasets}
         onSwitchDataset={handleSwitchDataset}
+        datasetSwitching={datasetSwitching}
         activeRole={activeRole}
         personas={meta.personas}
         onSwitchRole={setActiveRole}
@@ -224,6 +223,9 @@ export const App: React.FC = () => {
         </button>
       </div>
       {presentation && <ActiveFilters filters={filters} onUpdate={(patch) => setFilters(prev => ({ ...prev, ...patch }))} onReset={() => setFilters(INITIAL_FILTERS)} />}
+      {datasetError && <div role="alert" className="bg-rose-950 text-rose-100 px-3 py-2 text-xs">
+        {language === 'fa' ? 'تغییر مجموعه‌داده ناموفق بود' : 'Dataset switch failed'}: <bdi>{datasetError}</bdi>
+      </div>}
       {cmvError && <div role="alert" className="bg-rose-950 text-rose-100 px-3 py-2 text-xs flex gap-3 items-center">
         <span>{t('analyticsLoadError')}: <bdi>{cmvError}</bdi></span>
         <button type="button" className="underline" onClick={() => void refreshCmv()}>{t('retry')}</button>
@@ -277,6 +279,7 @@ export const App: React.FC = () => {
             <AnalyticsWorkspace
               darkMode={darkMode}
               cmvData={cmvData}
+              loading={cmvStatus === 'loading'}
               networkLayers={networkLayers}
               filters={filters}
               onUpdateFilters={(patch) => setFilters((prev) => ({ ...prev, ...patch }))}

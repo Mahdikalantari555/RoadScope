@@ -103,6 +103,18 @@ describe('AnalyticsWorkspace', () => {
     expect(onFlyToSegment).toHaveBeenCalledWith(7);
   });
 
+  it('keeps filters available while loading or after a request error', () => {
+    const props = { darkMode: true, cmvData: null, filters: { ...baseFilters, severity_codes: ['FATAL'] },
+      onUpdateFilters: vi.fn(), onResetAllFilters: vi.fn(), onFlyToSegment: vi.fn() };
+    const { rerender } = render(<LanguageProvider><AnalyticsWorkspace {...props} loading /></LanguageProvider>);
+    expect(screen.getByRole('status')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Remove filter: Severity/i })).toBeTruthy();
+    rerender(<LanguageProvider><AnalyticsWorkspace {...props} loading={false} /></LanguageProvider>);
+    expect(screen.queryByRole('status')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Remove filter: Severity/i }));
+    expect(props.onUpdateFilters).toHaveBeenCalledWith({ severity_codes: [] });
+  });
+
   it('renders localized loading and empty states without layout crash', () => {
     const { rerender } = render(
       <LanguageProvider>

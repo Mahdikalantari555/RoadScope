@@ -9,6 +9,7 @@ import { ActiveFilters } from './ActiveFilters';
 interface AnalyticsWorkspaceProps {
   darkMode: boolean;
   cmvData: CmvStatePayload | null;
+  loading?: boolean;
   networkLayers?: NetworkLayersPayload | null;
   filters: CmvFilterState;
   onUpdateFilters: (next: Partial<CmvFilterState>) => void;
@@ -19,6 +20,7 @@ interface AnalyticsWorkspaceProps {
 export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
   darkMode,
   cmvData,
+  loading = true,
   networkLayers = null,
   filters,
   onUpdateFilters,
@@ -32,12 +34,17 @@ export const AnalyticsWorkspace: React.FC<AnalyticsWorkspaceProps> = ({
   const [brushStartIdx, setBrushStartIdx] = useState<number | null>(null);
 
   if (!cmvData) {
-    return <div className="p-6 text-xs font-mono text-slate-400">{copy.loading}</div>;
+    return <div className="h-full overflow-y-auto p-3 space-y-3 text-xs">
+      <ActiveFilters filters={filters} onUpdate={onUpdateFilters} onReset={onResetAllFilters} />
+      <SegmentDetails segmentId={filters.segment_id} network={networkLayers} onClose={() => onUpdateFilters({ segment_id: null })} />
+      {loading && <div role="status" className="p-3 font-mono text-slate-400">{copy.loading}</div>}
+    </div>;
   }
 
   const { kpis, weekly_series, diurnal_matrix, severity_breakdown, taxonomy_breakdown, top_segments } = cmvData;
 
   const hasAnyFilter =
+    filters.verification_mode !== 'verified_only' ||
     Boolean(filters.start_utc) ||
     Boolean(filters.end_utc) ||
     filters.severity_codes.length > 0 ||
