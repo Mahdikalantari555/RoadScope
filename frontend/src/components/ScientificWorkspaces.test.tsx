@@ -291,4 +291,59 @@ describe('Advanced Scientific Workspaces (SpatialLab, RiskEb, Stewardship)', () 
     expect(await screen.findByText(/تشخیص تخصیص احتمالی حوادث/)).toBeTruthy();
     expect(screen.getByText('28.5%')).toBeTruthy();
   });
+
+  it('executes Persian RTL BYM2 MCMC, Bivariate Surrogate Fusion, MAUP Sensitivity, and Text Ablation', async () => {
+    window.localStorage.setItem('roadscope.language', 'fa');
+    vi.spyOn(uaiApi, 'getCovariates').mockResolvedValue({
+      by_infrastructure: [],
+      by_weather: [],
+      by_lighting: [],
+    });
+    vi.spyOn(uaiApi, 'getLabJobs').mockResolvedValue({ jobs: [] });
+    const maupSpy = vi.spyOn(uaiApi, 'runResearchMaupSensitivity').mockResolvedValue({
+      result: {
+        zoning_sensitivity_note: 'Sub-segment lixelization reduces intensity RMSE (0.9412 stability)',
+        resolutions: [
+          { lixel_resolution_m: 10, lixel_count: 920, au_pai: { mean: 2.84, ci95_halfwidth: 0.08 }, runtime_ms: 18.2, peak_memory_kb: 420 },
+          { lixel_resolution_m: 50, lixel_count: 195, au_pai: { mean: 2.71, ci95_halfwidth: 0.09 }, runtime_ms: 6.4, peak_memory_kb: 180 },
+        ],
+      },
+    });
+    const textSpy = vi.spyOn(uaiApi, 'runResearchTextAblation').mockResolvedValue({
+      result: {
+        embedding_version: 'local-charword-svd-v1',
+        text_lift_log_score: -0.123,
+        ablations: [
+          { variant: 'structured_only', au_pai: 1.58, holdout_mean_log_score: -0.91 },
+          { variant: 'structured_plus_text_fusion', au_pai: 1.54, holdout_mean_log_score: -1.03 },
+        ],
+      },
+    });
+
+    render(
+      <LanguageProvider>
+        <SpatialLabWorkspace
+          darkMode={true}
+          datasetId={1}
+          activeRole="gis_researcher"
+          onChangeOverlay={vi.fn()}
+          onNkdeResult={vi.fn()}
+          onGiStarResult={vi.fn()}
+          onNdbscanResult={vi.fn()}
+          nkdeResult={null}
+          giStarResult={null}
+          ndbscanResult={null}
+        />
+      </LanguageProvider>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'انتقال جهت‌دار و بنچمارک' }));
+    fireEvent.click(screen.getByRole('button', { name: /اجرای تحلیل حساسیت مقیاس لیکسل MAUP/ }));
+    await waitFor(() => expect(maupSpy).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/0.9412/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /اجرای مطالعهٔ حذفی متن/ }));
+    await waitFor(() => expect(textSpy).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/local-charword-svd-v1/)).toBeTruthy();
+  });
 });

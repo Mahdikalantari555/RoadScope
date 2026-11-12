@@ -52,6 +52,7 @@ bdi, .font-mono {
 dialog::backdrop {
   background: rgb(2 6 23 / 0.75);
 }
-[dir="rtl"] body {
-  font-family: Tahoma, Arial, sans-serif;
+[dir="rtl"] body,
+[dir="rtl"] .font-sans {
+  font-family: 'Vazirmatn', Tahoma, Arial, sans-serif;
 }

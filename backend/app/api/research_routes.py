@@ -10,6 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..db import db_session
 from ..services import research as r
 from ..services.adaptive_tnkde import run_dataset_tnkde
+from ..services.advanced_network import (
+    run_dataset_inhomogeneous_k,
+    run_maup_multiseed_sensitivity_benchmark,
+    run_text_enhanced_ablation_experiment,
+    run_zinb_st_graph_benchmark,
+)
 from ..services.allocations import incident_distribution
 from ..services.benchmarks import (
     compute_dataset_vgi_diagnostics,
@@ -20,33 +26,22 @@ from ..services.benchmarks import (
 from ..services.directed_topology import build_directed_lixel_topology
 from ..services.hawkes_network import decluster_upstream_hawkes, simulate_upstream_hawkes
 from ..services.length_spf import evaluate_dataset_length_eb
+from ..services.spatial_bayes import (
+    fit_joint_link_node_research_model,
+    run_dataset_bym2_and_vgi_imputation,
+)
+from ..services.surrogate_bivariate import run_dataset_surrogate_joint_fusion
 
 router = APIRouter(prefix="/api/v1/research", tags=["research"])
 
 GATES = {
-    "bym2": (
-        "Validated posterior inference, component scaling and convergence diagnostics are not implemented.",
-        "استنباط پسین، مقیاس‌بندی مؤلفه‌ها و تشخیص همگرایی معتبر هنوز پیاده‌سازی نشده است.",
+    "external_cloud_llm_narratives": (
+        "Transmitting witness narratives to external cloud LLMs is permanently disabled; only opt-in local PII-scrubbed embeddings are permitted.",
+        "ارسال روایت‌های شاهدان به سرویس‌های هوش مصنوعی ابری بیرونی به‌طور دائمی مسدود است؛ صرفاً استخراج ویژگی محلی پس از حذف اطلاعات هویتی و با تأیید رضایت مجاز است.",
     ),
-    "surrogate_joint": (
-        "Aggregate surrogate storage and descriptive exposure rates are active; bivariate Poisson-lognormal joint posterior inference remains gated.",
-        "ذخیره‌سازی تجمیعی معیارهای جایگزین و نرخ‌های توصیفی فعال است؛ استنباط پسین مشترک دومتغیره پواسون-لگ‌نرمال هنوز دروازه‌بندی شده است.",
-    ),
-    "st_gnn": (
-        "Exposure-aware longitudinal data and a validated multi-seed holdout protocol are required.",
-        "داده‌های طولی مبتنی بر مواجهه و پروتکل اعتبارسنجی چندبذری لازم است.",
-    ),
-    "text_gnn": (
-        "Consented narratives, license verification and privacy review are required; no text is sent externally.",
-        "روایت‌های دارای رضایت، بررسی مجوز و ممیزی حریم خصوصی لازم است؛ هیچ متنی به بیرون ارسال نمی‌شود.",
-    ),
-    "joint_link_node": (
-        "Node exposure observations and validated coupled junction-link inference are required.",
-        "مشاهدات مواجهه گره‌ها و استنباط مشترک تقاطع-یال لازم است.",
-    ),
-    "inhomogeneous_second_order": (
-        "Intensity-weighted null simulation and network boundary correction require validation.",
-        "شبیه‌سازی فرض صفر وزن‌دار و تصحیح مرز شبکه نیازمند اعتبارسنجی است.",
+    "uncalibrated_operational_deployment": (
+        "Synthetic benchmark models are research decision-support prototypes and cannot be used as standalone legal or automated enforcement evidence without empirical field calibration.",
+        "مدل‌های بنچمارک مصنوعی صرفاً نمونهٔ پژوهشی پشتیبان تصمیم هستند و بدون کالیبراسیون میدانی داده‌های واقعی نباید مبنای تصمیم‌گیری خودکار یا حقوقی قرار گیرند.",
     ),
 }
 
@@ -181,6 +176,70 @@ class SurrogateIngestRequest(Strict):
     records: list[SurrogateRecordInput] = Field(min_length=1, max_length=1000)
 
 
+class Bym2ResearchRequest(Strict):
+    dataset_id: int | None = None
+    include_unverified_vgi: bool = True
+    imputations_m: int = Field(default=12, ge=2, le=50)
+    chains: int = Field(default=4, ge=2, le=8)
+    draws_per_chain: int = Field(default=180, ge=60, le=600)
+    random_seed: int = 42
+
+
+class JointLinkNodeRequest(Strict):
+    dataset_id: int | None = None
+    junction_buffer_m: float = Field(default=22.0, ge=5.0, le=80.0)
+    chains: int = Field(default=4, ge=2, le=8)
+    draws_per_chain: int = Field(default=160, ge=60, le=500)
+    random_seed: int = 42
+
+
+class SurrogateJointRequest(Strict):
+    dataset_id: int | None = None
+    seed_synthetic_if_empty: bool = True
+    sensor_coverage_prob: float = Field(default=0.68, ge=0.1, le=1.0)
+    true_correlation_rho: float = Field(default=0.78, ge=-0.95, le=0.95)
+    random_seed: int = 42
+
+
+class NetworkKRequest(Strict):
+    dataset_id: int | None = None
+    max_radius_m: float = Field(default=350.0, ge=50.0, le=1500.0)
+    n_radii: int = Field(default=10, ge=4, le=30)
+    n_simulations: int = Field(default=39, ge=9, le=199)
+    random_seed: int = 42
+
+
+class VoronoiRequest(Strict):
+    dataset_id: int | None = None
+
+
+class TrajectoryHmmRequest(Strict):
+    dataset_id: int | None = None
+    fixes: list[dict[int, float]] | None = None
+    synthetic_steps: int = Field(default=5, ge=1, le=20)
+    transition_scale_m: float = Field(default=100.0, gt=5.0, le=2000.0)
+    random_seed: int = 42
+
+
+class StGraphRequest(Strict):
+    dataset_id: int | None = None
+    n_periods: int = Field(default=8, ge=4, le=24)
+    seeds: list[int] = Field(default_factory=lambda: [11, 29, 47], min_length=1, max_length=10)
+
+
+class TextAblationRequest(Strict):
+    dataset_id: int | None = None
+    consent_verified: bool = False
+    random_seed: int = 42
+
+
+class MaupSensitivityRequest(Strict):
+    dataset_id: int | None = None
+    resolutions_m: list[float] = Field(default_factory=lambda: [10.0, 25.0, 50.0], min_length=2, max_length=6)
+    seeds: list[int] = Field(default_factory=lambda: [17, 42, 89, 137], min_length=2, max_length=12)
+    bandwidth_m: float = Field(default=175.0, ge=30.0, le=800.0)
+
+
 @router.get("/capabilities")
 def capabilities() -> dict[str, Any]:
     from ..security import demo_enabled
@@ -196,18 +255,25 @@ def capabilities() -> dict[str, Any]:
             "pai_curve",
             "length_eb",
             "fit_length_spf",
+            "bym2_spatial_mcmc_and_vgi_mi",
+            "joint_link_node_bym2",
             "evpi",
             "incident_allocations",
             "vgi_diagnostics",
             "stabilized_ipw",
             "upstream_hawkes_simulation_and_declustering",
             "surrogate_aggregate_ingestion",
+            "surrogate_bivariate_poisson_lognormal",
+            "inhomogeneous_network_k_envelopes",
+            "network_voronoi_intensity",
+            "trajectory_viterbi_hmm",
+            "zinb_spatiotemporal_graph_benchmark",
+            "privacy_scrubbed_text_ablation",
             "chronological_holdout_benchmark",
+            "maup_multiseed_resolution_sensitivity",
         ],
         "primitives_only": [
             "fixed_tnkde",
-            "trajectory_hmm",
-            "network_voronoi",
             "hawkes_simulation",
         ],
         "unavailable": {key: {"reason": {"en": value[0], "fa": value[1]}} for key, value in GATES.items()},
@@ -457,5 +523,311 @@ def incident_allocations(accident_id: int) -> dict[str, Any]:
     try:
         with db_session() as conn:
             return incident_distribution(conn, accident_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/bym2")
+def run_bym2_endpoint(req: Bym2ResearchRequest) -> dict[str, Any]:
+    try:
+        with db_session() as conn:
+            ds_id = _active_dataset(conn, req.dataset_id)
+            result = run_dataset_bym2_and_vgi_imputation(
+                conn,
+                dataset_id=ds_id,
+                include_unverified_vgi=req.include_unverified_vgi,
+                imputations_m=req.imputations_m,
+                chains=req.chains,
+                draws_per_chain=req.draws_per_chain,
+                random_seed=req.random_seed,
+            )
+            return _store_research_run(
+                conn,
+                dataset_id=ds_id,
+                method="bym2_spatial_mcmc_and_vgi_mi",
+                params=req.model_dump(),
+                inputs={"dataset_id": ds_id, "random_seed": req.random_seed},
+                result=result,
+                limitations=result["limitations"],
+            )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/joint-link-node")
+def run_joint_link_node_endpoint(req: JointLinkNodeRequest) -> dict[str, Any]:
+    try:
+        with db_session() as conn:
+            ds_id = _active_dataset(conn, req.dataset_id)
+            result = fit_joint_link_node_research_model(
+                conn,
+                dataset_id=ds_id,
+                junction_buffer_m=req.junction_buffer_m,
+                chains=req.chains,
+                draws_per_chain=req.draws_per_chain,
+                random_seed=req.random_seed,
+            )
+            return _store_research_run(
+                conn,
+                dataset_id=ds_id,
+                method="joint_link_node_bym2",
+                params=req.model_dump(),
+                inputs={"dataset_id": ds_id, "links": result["link_count"], "nodes": result["node_count"]},
+                result=result,
+                limitations=result["limitations"],
+            )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/surrogate-joint")
+def run_surrogate_joint_endpoint(req: SurrogateJointRequest) -> dict[str, Any]:
+    try:
+        with db_session() as conn:
+            ds_id = _active_dataset(conn, req.dataset_id)
+            result = run_dataset_surrogate_joint_fusion(
+                conn,
+                dataset_id=ds_id,
+                seed_synthetic_if_empty=req.seed_synthetic_if_empty,
+                sensor_coverage_prob=req.sensor_coverage_prob,
+                true_correlation_rho=req.true_correlation_rho,
+                random_seed=req.random_seed,
+            )
+            return _store_research_run(
+                conn,
+                dataset_id=ds_id,
+                method="surrogate_bivariate_poisson_lognormal",
+                params=req.model_dump(),
+                inputs={"dataset_id": ds_id, "source_mode": result.get("source_mode")},
+                result=result,
+                limitations="Associative shared latent correlation; aggregate 60+ min buckets only.",
+            )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/network-k")
+def run_network_k_endpoint(req: NetworkKRequest) -> dict[str, Any]:
+    try:
+        with db_session() as conn:
+            ds_id = _active_dataset(conn, req.dataset_id)
+            result = run_dataset_inhomogeneous_k(
+                conn,
+                dataset_id=ds_id,
+                max_radius_m=req.max_radius_m,
+                n_radii=req.n_radii,
+                n_simulations=req.n_simulations,
+                random_seed=req.random_seed,
+            )
+            return _store_research_run(
+                conn,
+                dataset_id=ds_id,
+                method="inhomogeneous_network_k_envelopes",
+                params=req.model_dump(),
+                inputs={"dataset_id": ds_id, "events": result.get("event_count")},
+                result=result,
+                limitations="First-order pilot intensity estimated from exposure; interpret envelopes conditional on pilot model.",
+            )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/voronoi")
+def run_voronoi_endpoint(req: VoronoiRequest) -> dict[str, Any]:
+    import networkx as nx
+
+    try:
+        with db_session() as conn:
+            ds_id = _active_dataset(conn, req.dataset_id)
+            topo = build_directed_lixel_topology(conn, ds_id)
+            ug = nx.Graph()
+            for state, attrs in topo.graph.nodes(data=True):
+                lx_id = int(attrs["lixel_id"])
+                if lx_id not in ug:
+                    ug.add_node(lx_id, length_m=float(attrs["length_m"]))
+            for u_st, v_st, edata in topo.graph.edges(data=True):
+                u_lx = int(topo.graph.nodes[u_st]["lixel_id"])
+                v_lx = int(topo.graph.nodes[v_st]["lixel_id"])
+                if u_lx != v_lx:
+                    w = float(edata.get("weight_m", edata.get("distance_m", 10.0)))
+                    if not ug.has_edge(u_lx, v_lx) or w < ug[u_lx][v_lx]["distance_m"]:
+                        ug.add_edge(u_lx, v_lx, distance_m=w)
+
+            inc_rows = conn.execute(
+                """SELECT DISTINCT snapped_lixel_id FROM accidents
+                   WHERE dataset_id = ? AND verification_status = 'verified_canonical'
+                     AND snapped_lixel_id IS NOT NULL LIMIT 400""",
+                (ds_id,),
+            ).fetchall()
+            ev_nodes = [int(x[0]) for x in inc_rows if int(x[0]) in ug]
+            intensities = r.network_voronoi(ug, ev_nodes) if ev_nodes else {int(n): None for n in ug.nodes()}
+            valid_vals = [v * 1000.0 for v in intensities.values() if v is not None]
+            result = {
+                "event_seeds": len(ev_nodes),
+                "lixel_count": ug.number_of_nodes(),
+                "supported_lixels": len(valid_vals),
+                "disconnected_empty_lixels": sum(1 for v in intensities.values() if v is None),
+                "max_voronoi_per_km": round(max(valid_vals), 4) if valid_vals else 0.0,
+                "median_voronoi_per_km": round(float(sum(sorted(valid_vals)[len(valid_vals)//2:len(valid_vals)//2+1])), 4) if valid_vals else 0.0,
+            }
+            return _store_research_run(
+                conn,
+                dataset_id=ds_id,
+                method="network_voronoi_intensity",
+                params=req.model_dump(),
+                inputs={"dataset_id": ds_id, "seeds": len(ev_nodes)},
+                result=result,
+                limitations="Non-parametric 1/cell_length estimator; high variance in sparse corridors.",
+            )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/trajectory-hmm")
+def run_trajectory_hmm_endpoint(req: TrajectoryHmmRequest) -> dict[str, Any]:
+    import networkx as nx
+    import numpy as np
+
+    try:
+        with db_session() as conn:
+            ds_id = _active_dataset(conn, req.dataset_id)
+            topo = build_directed_lixel_topology(conn, ds_id)
+            dg = nx.DiGraph()
+            for state, attrs in topo.graph.nodes(data=True):
+                label = f"{state[0]}:{state[1]}:{'+' if state[2] >= 0 else '-'}"
+                dg.add_node(label, length_m=float(attrs["length_m"]), lixel_id=int(attrs["lixel_id"]))
+            for u_st, v_st, edata in topo.graph.edges(data=True):
+                u_lbl = f"{u_st[0]}:{u_st[1]}:{'+' if u_st[2] >= 0 else '-'}"
+                v_lbl = f"{v_st[0]}:{v_st[1]}:{'+' if v_st[2] >= 0 else '-'}"
+                dg.add_edge(u_lbl, v_lbl, distance_m=float(edata.get("weight_m", 10.0)))
+
+            if req.fixes is not None:
+                emissions = [{str(k): float(v) for k, v in step.items()} for step in req.fixes]
+                true_walk = None
+            else:
+                if req.synthetic_steps < 2:
+                    raise ValueError("Trajectory HMM requires at least two fixes; use single-fix matching.")
+                rng = np.random.default_rng(req.random_seed)
+                nodes = sorted(dg.nodes())
+                walk: list[str] = []
+                for idx_start in rng.permutation(len(nodes)):
+                    cur = nodes[int(idx_start)]
+                    candidate_walk = [cur]
+                    for _ in range(req.synthetic_steps - 1):
+                        succs = sorted(dg.successors(cur))
+                        if not succs:
+                            break
+                        cur = succs[int(rng.integers(len(succs)))]
+                        candidate_walk.append(cur)
+                    if len(candidate_walk) == req.synthetic_steps:
+                        walk = candidate_walk
+                        break
+                if len(walk) < 2:
+                    raise ValueError("Could not sample a multi-step legal trajectory on this graph.")
+                true_walk = walk
+                emissions = []
+                for true_st in walk:
+                    distractor = nodes[int(rng.integers(len(nodes)))]
+                    step_em = {true_st: 0.72}
+                    if distractor != true_st:
+                        step_em[distractor] = 0.28
+                    emissions.append(step_em)
+
+            matched = r.trajectory_hmm(dg, emissions, transition_scale_m=req.transition_scale_m)
+            exact_acc = (
+                round(sum(int(a == b) for a, b in zip(matched["path"], true_walk)) / len(true_walk), 4)
+                if true_walk
+                else None
+            )
+            result = {
+                **matched,
+                "fix_count": len(emissions),
+                "synthetic_ground_truth_path": true_walk,
+                "exact_state_recovery_rate": exact_acc,
+            }
+            return _store_research_run(
+                conn,
+                dataset_id=ds_id,
+                method="trajectory_viterbi_hmm",
+                params={"synthetic_steps": req.synthetic_steps, "transition_scale_m": req.transition_scale_m},
+                inputs={"dataset_id": ds_id, "fixes": len(emissions)},
+                result=result,
+                limitations=matched["limitation"],
+            )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/st-graph")
+def run_st_graph_endpoint(req: StGraphRequest) -> dict[str, Any]:
+    try:
+        with db_session() as conn:
+            ds_id = _active_dataset(conn, req.dataset_id)
+            result = run_zinb_st_graph_benchmark(
+                conn,
+                dataset_id=ds_id,
+                n_periods=req.n_periods,
+                seeds=req.seeds,
+            )
+            return _store_research_run(
+                conn,
+                dataset_id=ds_id,
+                method="zinb_spatiotemporal_graph_benchmark",
+                params=req.model_dump(),
+                inputs={"dataset_id": ds_id, "periods": req.n_periods},
+                result=result,
+                limitations=result.get("negative_result_note") or "Chronological panel benchmark on urban road graph.",
+            )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/text-ablation")
+def run_text_ablation_endpoint(req: TextAblationRequest) -> dict[str, Any]:
+    try:
+        with db_session() as conn:
+            ds_id = _active_dataset(conn, req.dataset_id)
+            result = run_text_enhanced_ablation_experiment(
+                conn,
+                dataset_id=ds_id,
+                consent_verified=req.consent_verified,
+                random_seed=req.random_seed,
+            )
+            return _store_research_run(
+                conn,
+                dataset_id=ds_id,
+                method="privacy_scrubbed_text_ablation",
+                params=req.model_dump(),
+                inputs={"dataset_id": ds_id, "consent_verified": req.consent_verified},
+                result=result,
+                limitations="Strictly offline hashed n-gram SVD embedding after regex PII redaction.",
+            )
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/maup-sensitivity")
+def run_maup_sensitivity_endpoint(req: MaupSensitivityRequest) -> dict[str, Any]:
+    try:
+        with db_session() as conn:
+            ds_id = _active_dataset(conn, req.dataset_id)
+            result = run_maup_multiseed_sensitivity_benchmark(
+                conn,
+                dataset_id=ds_id,
+                resolutions_m=req.resolutions_m,
+                seeds=req.seeds,
+                bandwidth_m=req.bandwidth_m,
+            )
+            return _store_research_run(
+                conn,
+                dataset_id=ds_id,
+                method="maup_multiseed_resolution_sensitivity",
+                params=req.model_dump(),
+                inputs={"dataset_id": ds_id, "resolutions_m": req.resolutions_m, "seeds": req.seeds},
+                result=result,
+                limitations=result["zoning_sensitivity_note"],
+            )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

@@ -1,47 +1,46 @@
 # RoadScope Scientific & Engineering Implementation Status
 
-This document records the exact implementation status of the 10 OpenSpec changes integrated into RoadScope, distinguishing **end-to-end verified capabilities**, **standalone library primitives**, and **gated models** whose data prerequisites are not met by a single synthetic urban snapshot.
+This document records the complete implementation status of all 10 OpenSpec changes (**68/68 tasks completed**) integrated into RoadScope, alongside explicit operational and privacy boundaries enforced via `GET /api/v1/research/capabilities`.
 
 ---
 
-## 1. Implemented & Verified End-to-End Capabilities
+## 1. Implemented & Verified End-to-End Capabilities (10/10 OpenSpec Changes)
 
 1. **Operational Foundation & Security (`roadscope-foundation`)**
    - Dual `ROADSCOPE_*` / `UAI_*` configuration (`backend/app/config.py`), SHA-256 checksummed SQLite migrations (`migrations/001..004`), online backup/restore (`backend/app/backup.py`, `scripts/database.py`), server-side bearer RBAC + synthetic-only demo guard + rate/body limits (`backend/app/security.py`), XSS-escaped cartographic popups (`frontend/src/utils/html.ts`), honest SQLite Docker Compose, and GitHub Actions CI.
 
 2. **Bilingual EN/FA & RTL/LTR Geovisual Experience (`roadscope-experience`)**
-   - Full English (`ltr`) and Persian (`rtl`, Vazirmatn + JetBrains Mono `tabular-nums`, `<bdi>` isolation for metric coordinates, formulas, and corridor names) across all 6 workspaces (`HeaderBar`, `MapCanvas`, `AnalyticsWorkspace`, `SpatialLabWorkspace`, `RiskEbWorkspace`, `CitizenReportWorkspace`, `StewardWorkspace`, `ResearchAccess`).
+   - Full English (`ltr`) and Persian (`rtl`, Vazirmatn + JetBrains Mono `tabular-nums`, `<bdi>` isolation for metric coordinates, formulas, and corridor names) across all workspaces (`HeaderBar`, `MapCanvas`, `AnalyticsWorkspace`, `SpatialLabWorkspace`, `RiskEbWorkspace`, `CitizenReportWorkspace`, `StewardWorkspace`, `SimulatorWorkspace`, `ResearchAccess`).
 
 3. **Directed Network Topology & Conservative Transport (`directed-network-diffusion`)**
    - Directed road-segment attributes (`oneway_mode`, `forward_lanes`, `backward_lanes`, `direction_source`), validated `turn_restrictions` triggers, topology cache revisioning (`migrations/003_directed_network.sql`), directed lixel graph (`backend/app/services/directed_topology.py`), implicit backward-Euler conservative advection-diffusion (`backend/app/services/directed_transport.py`), and symmetric lixel heat diffusion (`backend/app/services/research.py`).
-   - Endpoints: `GET /api/v1/network/directed-topology`, `POST /api/v1/network/turn-restrictions`, `POST /api/v1/lab/directed-transport`.
 
 4. **Bounded Adaptive Spatiotemporal TNKDE & LOO-LCV (`spatiotemporal-adaptive-tnkde`)**
-   - Mass-conserving space-time network kernel density estimation with clipped Abramson pilot bandwidth adaptation, causal past-only vs. retrospective temporal kernels, and event-level Leave-One-Out Likelihood Cross-Validation (`backend/app/services/adaptive_tnkde.py`), wired to an interactive time-slice player in `SpatialLabWorkspace` and `MapCanvas` (`POST /api/v1/research/tnkde`).
+   - Mass-conserving space-time network kernel density estimation with clipped Abramson pilot bandwidth adaptation, causal past-only vs. retrospective temporal kernels, and event-level Leave-One-Out Likelihood Cross-Validation (`backend/app/services/adaptive_tnkde.py`, `POST /api/v1/research/tnkde`).
 
-5. **Safety Bayes, Length-Scaled NB-SPF, Hauer CURE & Posterior EVPI (`safety-bayes-and-decisions`)**
-   - Road-class EB/PSI plus fitted length-scaled Negative Binomial SPF ($\mu_i = L_i \exp(\beta_0 + \beta_1 \ln \text{AADT}_i)$, $\alpha_i = \alpha_1 / L_i$) via `scipy.optimize` (`backend/app/services/length_spf.py`), tie-invariant Hauer CURE cumulative residual plots with $\pm 2\hat{\sigma}$ bands (`backend/app/services/cure_diagnostics.py`, `CureChart.tsx`), and posterior Expected Value of Perfect Information (`POST /api/v1/research/evpi`) strictly separated from heuristic MCDA weights in `RiskEbWorkspace`.
+5. **Safety Bayes, Length-Scaled NB-SPF, Hauer CURE, BYM2 MCMC & Posterior EVPI (`safety-bayes-and-decisions`)**
+   - Road-class EB/PSI, length-scaled Negative Binomial SPF ($\mu_i = L_i \exp(\beta_0 + \beta_1 \ln \text{AADT}_i)$, $\alpha_i = \alpha_1 / L_i$), tie-invariant Hauer CURE residual diagnostics (`CureChart.tsx`), Riebler-scaled BYM2 spatial hierarchical MCMC via multi-chain Laplace-preconditioned Elliptical Slice Sampling with Gelman-Rubin split-$\hat{R}$ & bulk ESS diagnostics (`backend/app/services/spatial_bayes.py`, `POST /api/v1/research/bym2`), and posterior EVPI decision support (`POST /api/v1/research/evpi`).
 
 6. **Directed Upstream Hawkes Cascades & EM Declustering (`network-hawkes-cascades`)**
-   - Subcritical ($\eta < 1$) upstream-only network Hawkes secondary crash simulation with exact parent/root ground truth and research-only Expectation-Maximization stochastic declustering (`backend/app/services/hawkes_network.py`, `POST /api/v1/research/hawkes`, interactive panel in `SimulatorWorkspace`).
+   - Subcritical ($\eta < 1$) upstream-only network Hawkes secondary crash simulation with exact parent/root ground truth and research-only Expectation-Maximization stochastic declustering (`backend/app/services/hawkes_network.py`, `POST /api/v1/research/hawkes`).
 
-7. **Fractional VGI Allocation & Stabilized IPW Diagnostics (`vgi-bias-and-uncertainty`)**
-   - Persistent `incident_lixel_allocations` table (`migrations/004_research_contracts.sql`) automatically invalidated/recomputed on steward review or cluster merge (`backend/app/services/allocations.py`), selectable `allocation_mode: "hard" | "fractional"` in NKDE with L1 mass-shift sensitivity (`SpatialLabWorkspace`), VGI ambiguity/entropy diagnostics (`GET /api/v1/research/vgi-diagnostics` in `StewardWorkspace`), and clipped stabilized Inverse Probability Weighting (`POST /api/v1/research/ipw`).
+7. **Fractional VGI Allocation, Stabilized IPW & Rubin Multiple Imputation (`vgi-bias-and-uncertainty`)**
+   - Persistent `incident_lixel_allocations` table (`migrations/004_research_contracts.sql`), selectable `hard | fractional` NKDE allocation with L1 mass-shift sensitivity, VGI ambiguity/entropy diagnostics (`GET /api/v1/research/vgi-diagnostics`), clipped stabilized IPW (`POST /api/v1/research/ipw`), and Rubin's Multiple Imputation across $M$ discrete categorical VGI allocations recording within/between-imputation variance and Fraction of Missing Information (`POST /api/v1/research/bym2`).
 
-8. **Chronological Holdout Benchmarks & Exact Length-Weighted PAI Curves (`reproducible-research-benchmarks`)**
-   - Immutable `research_runs` manifests, exact fractional-lixel `PAI(a)` & `AU-PAI` curves (`backend/app/services/benchmark_curves.py`, `PaiCurveChart.tsx`), and leakage-free 70%/30% chronological train/future-holdout benchmarking across Historical Count, Linear Crash Density, Exposure-Aware NB-EB, and Shortest-Path NKDE (`backend/app/services/benchmarks.py`, `POST /api/v1/research/benchmark`).
+8. **Chronological Holdouts, Exact Length-Weighted PAI Curves & Multi-Seed MAUP Sensitivity (`reproducible-research-benchmarks`)**
+   - Immutable `research_runs` manifests, exact fractional-lixel `PAI(a)` & `AU-PAI` curves (`backend/app/services/benchmark_curves.py`, `PaiCurveChart.tsx`), leakage-free 70%/30% chronological benchmarks (`POST /api/v1/research/benchmark`), and multi-seed / multi-resolution (`10m / 25m / 50m`) MAUP sensitivity experiments reporting CIs, calibration, Spearman rank stability, runtime ms, and peak memory (`POST /api/v1/research/maup-sensitivity`).
 
-9. **Privacy-Preserving Surrogate Safety Schema (`surrogate-safety-fusion`)**
-   - Aggregate-only `surrogate_observations` schema rejecting sub-60-minute buckets or raw trajectory identifiers (`migrations/004_research_contracts.sql`), distinguishing uncovered segments from zero-conflict covered segments (`GET/POST /api/v1/research/surrogates`).
+9. **Privacy-Preserving Surrogate Safety Schema & Bivariate Poisson-Lognormal Fusion (`surrogate-safety-fusion`)**
+   - Aggregate-only `surrogate_observations` schema (`>= 60` min buckets, zero raw trajectory IDs), seeded paired crash-surrogate generator with partial sensor coverage, and multi-chain Bivariate Poisson-Lognormal MCMC (`backend/app/services/surrogate_bivariate.py`, `POST /api/v1/research/surrogate-joint`) strictly separating uncovered segments from zero-conflict covered segments and evaluated on held-out windows against crash-only and exposure-only baselines.
+
+10. **Advanced Network Point Processes, Joint Link-Node, ZINB-STGraph & PII-Scrubbed Text Ablation (`advanced-network-research`)**
+    - Network Voronoi (`POST /api/v1/research/voronoi`), Inhomogeneous Network $K_{\text{inhom}}(r)$ & $L_{\text{inhom}}(r)$ with Monte Carlo inhomogeneous Poisson envelopes (`POST /api/v1/research/network-k`), Coupled Bipartite Link-Node BYM2 (`POST /api/v1/research/joint-link-node`), Directed Viterbi Trajectory HMM (`POST /api/v1/research/trajectory-hmm`), multi-seed `ZINB-STGraph` spatiotemporal message-passing benchmark (`POST /api/v1/research/st-graph`), and consent-gated local PII-scrubbed deterministic narrative 4-way ablation (`local-charword-svd-v1`, `POST /api/v1/research/text-ablation`).
 
 ---
 
-## 2. Library Primitives & Honesty-Gated Models
+## 2. Explicit Ethical & Operational Guards (`unavailable`)
 
-Exposed transparently via `GET /api/v1/research/capabilities` and the UI **Research availability & access** dialog:
+Exposed transparently via `GET /api/v1/research/capabilities` and localized in English and Persian:
 
-- **Library Primitives (`primitives_only`)**: `network_voronoi_intensity` and `viterbi_map_match` in `backend/app/services/research.py` (unit-tested in `backend/tests/test_research.py`).
-- **Explicitly Gated (`unavailable`)**:
-  - `spatial_bayes_bym2_inla`: Requires multi-period panel crash counts and MCMC/INLA posterior validation; not approximated by deterministic smoothing.
-  - `joint_crash_surrogate_poisson_lognormal`: Requires paired empirical crash and conflict observation windows before joint latent-risk fusion is enabled.
-  - `st_gnn_forecasting` & `text_narrative_embedding`: Require longitudinal panel horizons and PII-scrubbed narrative corpora respectively.
+- **`external_cloud_llm_narratives`**: Disabled by strict privacy policy; narrative experiments execute 100% locally via deterministic PII scrubbing and `local-charword-svd-v1` only after `consent_verified=true`.
+- **`uncalibrated_operational_deployment`**: Research posteriors and rankings are calibrated on synthetic/demo urban data and require agency-verified police crash registries + metered AADT sensors prior to real-world capital allocation.
