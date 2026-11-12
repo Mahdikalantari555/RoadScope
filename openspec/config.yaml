@@ -1,0 +1,15 @@
+schema: spec-driven
+
+context: |
+  RoadScope is a bilingual Persian/English network-constrained road-safety research platform.
+  Persian is RTL and English is LTR. The application currently uses React/Vite, FastAPI,
+  SQLite and MapLibre; /api/v1 and existing user data must remain compatible during migration.
+  Synthetic data and research-only inference must be labeled. Metric computations use
+  EPSG:25832 and GeoJSON uses EPSG:4326. See IMPLEMENTATION_PLAN_FA.md and
+  LITERATURE_REVIEW_FA.md for scope and scientific cautions.
+rules:
+  specs:
+    - Include testable requirements and WHEN/THEN scenarios, including failure cases.
+    - State units, assumptions, uncertainty, and provenance for scientific outputs.
+  tasks:
+    - Include migration, security, localization, tests, documentation and rollback where applicable.
