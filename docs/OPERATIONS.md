@@ -2,7 +2,7 @@
 
 ## 1. Storage Engine & Honest Architecture
 
-RoadScope uses **SQLite with R*Tree spatial indexing** as its active persistence engine, storing all metric coordinates and Linear Referencing System (LRS) offsets in **`EPSG:25832` (ETRS89 / UTM Zone 32N, meters)** and transforming to **`EPSG:4326` (WGS84)** strictly at the GeoJSON boundary.
+RoadScope uses **SQLite with R*Tree spatial indexing** as its active persistence engine, storing all metric coordinates and Linear Referencing System (LRS) offsets in **the active dataset's canonical CRS** (`dataset_sources.crs_epsg`, published as `canonical_crs`; `EPSG:3857` for the Tehran demo) and transforming to **`EPSG:4326` (WGS84)** strictly at the GeoJSON boundary. Ingestion is worldwide: any globally valid coordinate is accepted, and network imports declare their own `epsg_in`. See `openspec/changes/tehran-citizen-reporting/`.
 
 Docker Compose runs two honest services (`backend` + `frontend`) backed by a persistent `uai_sqlite_data` volume; unused PostGIS containers have been removed so deployment manifests match runtime behavior.
 

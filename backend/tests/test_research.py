@@ -113,7 +113,8 @@ def test_upgrade_replay_and_backup(tmp_path):
     init_schema_and_reference_data(path)
     init_schema_and_reference_data(path)
     with get_connection(path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 2
+        # 003 (directed network), 004 (research contracts) and 005 (study areas / CRS-agnostic schema)
+        assert conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 3
     copy = tmp_path / "backup.sqlite"
     backup_database(path, copy)
     with sqlite3.connect(copy) as conn:

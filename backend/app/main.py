@@ -11,17 +11,23 @@ from fastapi.staticfiles import StaticFiles
 
 from .api.research_routes import router as research_router
 from .api.routes import router as api_router
-from .config import DEFAULT_SEED, FRONTEND_DIST_DIR
+from .config import DEFAULT_SEED, DEFAULT_STUDY_AREA, FRONTEND_DIST_DIR
 from .db import db_session, init_schema_and_reference_data
 from .security import install_security
 from .services.point_process_sim import run_stochastic_network_simulation
+from .services.study_area_service import resolve_study_area, sync_study_areas
 
 
 def ensure_initialized() -> None:
     init_schema_and_reference_data()
     with db_session() as conn:
+        # File/env-defined study areas are persisted so the registry survives restarts.
+        sync_study_areas(conn)
         cnt = conn.execute("SELECT COUNT(*) AS c FROM dataset_sources").fetchone()["c"]
         if int(cnt) == 0:
+            # The first-run demo dataset is bound to the configured study area (Tehran by
+            # default). Adding another city later is a data operation, not a code change.
+            area = resolve_study_area(DEFAULT_STUDY_AREA, conn)
             run_stochastic_network_simulation(
                 conn,
                 scenario_key="MULTI_COVARIATE_URBAN",
@@ -34,6 +40,7 @@ def ensure_initialized() -> None:
                 study_period_years=1.0,
                 activate_dataset=True,
                 actor_role="simulation_scientist",
+                study_area_key=area.key,
             )
 
 

@@ -34,6 +34,7 @@ def test_legacy_upgrade_backups_and_repeated_application(tmp_path):
     assert apply_migrations(conn, MIGRATIONS_DIR) == [
         "003_directed_network.sql",
         "004_research_contracts.sql",
+        "005_generalize_study_areas.sql",
     ]
     directions = conn.execute("SELECT direction, source FROM road_segment_directions").fetchall()
     assert len(directions) == 3

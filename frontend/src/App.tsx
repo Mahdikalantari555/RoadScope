@@ -36,7 +36,7 @@ const INITIAL_FILTERS: CmvFilterState = {
 };
 
 export const App: React.FC = () => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [darkMode, setDarkMode] = useState<boolean>(true);
   const [meta, setMeta] = useState<PlatformMeta | null>(null);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceMode>('analytics');
@@ -227,6 +227,9 @@ export const App: React.FC = () => {
                 setActiveWorkspace('citizen_vgi');
               }
             }}
+            center4326={meta.center_4326}
+            networkBbox4326={meta.network_bbox_4326 ?? null}
+            canonicalEpsg={meta.active_dataset?.crs_epsg ?? Number(meta.canonical_crs.split(':')[1])}
             vgiDraftOverlay={activeWorkspace === 'citizen_vgi' ? vgiDraftOverlay : null}
             flyToTarget={flyToTarget}
           />
@@ -281,6 +284,18 @@ export const App: React.FC = () => {
               categories={meta.categories}
               severities={meta.severities}
               clickedMapCoord={clickedMapCoord}
+              suggestedPreset4326={
+                meta.network_bbox_4326
+                  ? [
+                      (meta.network_bbox_4326.min_lon + meta.network_bbox_4326.max_lon) / 2,
+                      (meta.network_bbox_4326.min_lat + meta.network_bbox_4326.max_lat) / 2,
+                    ]
+                  : meta.center_4326
+              }
+              studyAreaLabel={
+                language === 'fa' ? meta.study_area_fa ?? meta.study_area : meta.study_area
+              }
+              ingestionScope={meta.ingestion_scope ?? null}
               onActivatePinTool={() => setActiveTool('vgi_pin')}
               onUpdateVgiDraftOverlay={setVgiDraftOverlay}
               onReportSubmittedOrCorroborated={() => {

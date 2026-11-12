@@ -2,6 +2,11 @@
 
 This document records the complete implementation status of all 10 OpenSpec changes (**68/68 tasks completed**) integrated into RoadScope, alongside explicit operational and privacy boundaries enforced via `GET /api/v1/research/capabilities`.
 
+A further change, [`tehran-citizen-reporting`](../openspec/changes/tehran-citizen-reporting/), replaces the former
+Frankfurt demo area with a labelled synthetic **Tehran** citizen-reporting demo and makes ingestion region-agnostic
+(open bounds, dataset-driven canonical CRS, GeoJSON network import in any EPSG). See its `tasks.md` for the current
+checklist.
+
 ---
 
 ## 1. Implemented & Verified End-to-End Capabilities (10/10 OpenSpec Changes)

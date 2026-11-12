@@ -23,6 +23,12 @@ class Identity:
 
 identity: ContextVar[Identity | None] = ContextVar("identity", default=None)
 
+# In demo mode the public instance stays read-mostly: dataset administration and dataset
+# generation are refused once real data exists. Ingest endpoints are intentionally exempt,
+# because accepting citizen reports/imports from anywhere is the point of the platform.
+DEMO_GUARDED_PREFIXES = ("/simulator/", "/datasets/")
+
+
 READ_POSTS = {
     "/api/v1/crs/project",
     "/api/v1/vgi/preview-snap-and-conflate",
@@ -45,9 +51,15 @@ def install_security(app) -> None:
         principal: Identity | None = None
         if path.startswith("/api/v1"):
             if demo_enabled():
-                with db_session() as conn:
-                    if conn.execute("SELECT 1 FROM dataset_sources WHERE is_synthetic = 0 LIMIT 1").fetchone():
-                        return JSONResponse({"detail": "Demo mode refuses non-synthetic datasets."}, status_code=503)
+                if any(prefix in path for prefix in DEMO_GUARDED_PREFIXES):
+                    with db_session() as conn:
+                        real_dataset = conn.execute(
+                            "SELECT 1 FROM dataset_sources WHERE is_synthetic = 0 LIMIT 1"
+                        ).fetchone()
+                    if real_dataset:
+                        return JSONResponse(
+                            {"detail": "Demo mode refuses non-synthetic datasets."}, status_code=503
+                        )
                 principal = Identity(None, "data_steward")
             else:
                 bearer = request.headers.get("authorization", "").removeprefix("Bearer ")

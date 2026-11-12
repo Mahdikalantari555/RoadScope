@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 from shapely.wkt import loads as wkt_loads
 
-from ..config import CANONICAL_EPSG
+from ..context import dataset_context
 from ..crs import interpolate_lrs_point, to_wgs84
 from ..db import log_audit_event, utc_now_iso
 from .map_matching import (
@@ -17,9 +17,19 @@ from .map_matching import (
     compute_topological_snap_candidates,
 )
 from .network_generator import (
+    TEHRAN_DEMO_ORIGIN_3857,
     create_network_and_lixels,
     invalidate_topology_cache,
 )
+from .study_area_service import resolve_study_area
+
+# Demo hotspots are defined relative to the synthetic network origin (see
+# network_generator.TEHRAN_DEMO_ORIGIN_3857) so they stay valid for any CRS.
+_DEMO_OX, _DEMO_OY = TEHRAN_DEMO_ORIGIN_3857
+DEMO_HOTSPOTS = [
+    (_DEMO_OX + 1770.0, _DEMO_OY + 1420.0, 240.0, 1.65),  # bridge/expressway interchange
+    (_DEMO_OX + 2100.0, _DEMO_OY + 1400.0, 260.0, 1.45),  # central signalised hub
+]
 
 SCENARIO_METADATA: dict[str, dict[str, Any]] = {
     "MULTI_COVARIATE_URBAN": {
@@ -129,6 +139,8 @@ def run_stochastic_network_simulation(
     study_period_years: float = 1.0,
     activate_dataset: bool = True,
     actor_role: str = "simulation_scientist",
+    study_area_key: str | None = None,
+    network_generator: str | None = None,
 ) -> dict[str, Any]:
     """
     Generate a complete seeded synthetic road network, lixelation, mathematical ground-truth
@@ -155,23 +167,34 @@ def run_stochastic_network_simulation(
     if activate_dataset:
         conn.execute("UPDATE dataset_sources SET is_active = 0")
 
-    ds_name = f"[SYNTHETIC] {meta['title']} (Lixel {int(lixel_resolution_m)}m · Seed {random_seed})"
+    area = resolve_study_area(study_area_key)
+    epsg = int(area.canonical_epsg)
+    generator = network_generator or area.network_generator
+    params.update({"study_area_key": area.key, "network_generator": generator})
+
+    ds_name = (
+        f"[SYNTHETIC] {meta['title']} · {area.name_en} "
+        f"(Lixel {int(lixel_resolution_m)}m · Seed {random_seed})"
+    )
     cur = conn.execute(
         """
         INSERT INTO dataset_sources
         (name, scenario_key, is_synthetic, crs_epsg, lixel_resolution_m, study_period_years,
-         random_seed, generator_params_json, description, is_active, created_at_utc)
-        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+         random_seed, generator_params_json, description, study_area_key, epsg_definition,
+         is_active, created_at_utc)
+        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             ds_name,
             scenario_key,
-            CANONICAL_EPSG,
+            epsg,
             float(lixel_resolution_m),
             float(study_period_years),
             int(random_seed),
             json.dumps(params),
             meta["description"],
+            area.key,
+            f"EPSG:{epsg}",
             1 if activate_dataset else 0,
             now,
         ),
@@ -183,13 +206,14 @@ def run_stochastic_network_simulation(
         dataset_id=dataset_id,
         lixel_resolution_m=lixel_resolution_m,
         rng_seed=random_seed,
+        network_generator=generator or "tehran_demo_v1",
     )
 
     # Load segments + lixels to evaluate exact analytical ground-truth intensity lambda(e, m)
     seg_rows = conn.execute(
         """
         SELECT s.id, s.name, s.road_class, s.speed_limit_kmh, s.lanes, s.length_m,
-               s.sinuosity, s.slope_pct, s.elevation_level, s.wkt_25832,
+               s.sinuosity, s.slope_pct, s.elevation_level, s.wkt_m,
                t.aadt_vehicles_per_day AS eff_aadt
         FROM road_segments s
         LEFT JOIN traffic_observations t ON t.segment_id = s.id AND t.dataset_id = s.dataset_id
@@ -199,7 +223,7 @@ def run_stochastic_network_simulation(
     ).fetchall()
     seg_dict = {int(r["id"]): dict(r) for r in seg_rows}
     for s in seg_dict.values():
-        s["geom"] = wkt_loads(s["wkt_25832"])
+        s["geom"] = wkt_loads(s["wkt_m"])
 
     lix_rows = conn.execute(
         """
@@ -249,13 +273,14 @@ def run_stochastic_network_simulation(
             exposure_term = (aadt / 15000.0) ** 0.72
             junc_term = 1.0 + (3.25 * math.exp(-d_junc / 48.0) if elev == 0 else 0.25)
             geom_term = 1.0 + 2.4 * max(0.0, sinu - 1.0) + 0.08 * abs(float(s["slope_pct"]))
-            # Add two high-risk hotspot corridors (Friedensbrücke approach & Berliner Strasse central hub)
+            # Two deterministic hotspot corridors of the seeded demo network: a bridge approach
+            # and a central signalised hub. Coordinates are derived from the demo origin, so the
+            # intensity surface never depends on a hard-coded city.
             spatial_hotspot = 1.0
             mx, my = float(r["mid_x_m"]), float(r["mid_y_m"])
-            if math.hypot(mx - 477080.0, my - 5551340.0) < 230.0 and elev == 0:
-                spatial_hotspot += 1.65
-            if math.hypot(mx - 478020.0, my - 5551950.0) < 260.0 and elev == 0:
-                spatial_hotspot += 1.45
+            for hx, hy, radius_m, boost in DEMO_HOTSPOTS:
+                if math.hypot(mx - hx, my - hy) < radius_m and elev == 0:
+                    spatial_hotspot += boost
             lam = 3.4 * base_intensity_scale * class_mult.get(rclass, 1.0) * exposure_term * junc_term * geom_term * spatial_hotspot
 
         lam = round(float(lam), 4)
@@ -371,13 +396,13 @@ def run_stochastic_network_simulation(
                     (dataset_id, source_type, verification_status, reporter_user_id, category_id, severity_id,
                      occurred_at_utc, reported_at_utc, reporting_lag_min, involved_vehicles, involved_pedestrians,
                      involved_cyclists, emergency_response_present, narrative, observational_radius_m, srid,
-                     raw_x_m, raw_y_m, raw_lon, raw_lat, raw_wkt_25832,
-                     snapped_x_m, snapped_y_m, snapped_lon, snapped_lat, snapped_wkt_25832,
+                     raw_x_m, raw_y_m, raw_lon, raw_lat,
+                     snapped_x_m, snapped_y_m, snapped_lon, snapped_lat,
                      snapped_segment_id, snapped_lixel_id, linear_offset_m, orthogonal_snap_dist_m,
                      snap_probability, snap_candidates_json, vgi_credibility_score, witness_count,
                      is_false_alarm_gt, gt_source_event_uid, created_at_utc)
                     VALUES (?, 'ground_truth_realization', 'verified_canonical', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 8.0, ?,
-                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.97, '[]', 0.96, ?, 0, ?, ?)
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.97, '[]', 0.96, 1, 0, ?, ?)
                     """,
                     (
                         dataset_id,
@@ -392,22 +417,19 @@ def run_stochastic_network_simulation(
                         cycs,
                         emerg,
                         f"Confirmed {cat_code.lower().replace('_', ' ')} on {seg['name']} (LRS m={m_exact:.1f}m).",
-                        CANONICAL_EPSG,
+                        epsg,
                         rx_m,
                         ry_m,
                         rlon,
                         rlat,
-                        f"POINT ({rx_m:.3f} {ry_m:.3f})",
                         tx_m,
                         ty_m,
                         tlon,
                         tlat,
-                        f"POINT ({tx_m:.3f} {ty_m:.3f})",
                         lix["segment_id"],
                         lix["id"],
                         round(m_exact, 3),
                         d_ortho,
-                        1 if sev_code == "PDO" else int(rng.integers(1, 4)),
                         gt_uid,
                         now,
                     ),
@@ -476,13 +498,13 @@ def run_stochastic_network_simulation(
                         (dataset_id, source_type, verification_status, reporter_user_id, category_id, severity_id,
                          occurred_at_utc, reported_at_utc, reporting_lag_min, involved_vehicles, involved_pedestrians,
                          involved_cyclists, emergency_response_present, narrative, observational_radius_m, srid,
-                         raw_x_m, raw_y_m, raw_lon, raw_lat, raw_wkt_25832,
-                         snapped_x_m, snapped_y_m, snapped_lon, snapped_lat, snapped_wkt_25832,
+                         raw_x_m, raw_y_m, raw_lon, raw_lat,
+                         snapped_x_m, snapped_y_m, snapped_lon, snapped_lat,
                          snapped_segment_id, snapped_lixel_id, linear_offset_m, orthogonal_snap_dist_m,
                          snap_probability, snap_candidates_json, vgi_credibility_score, witness_count,
                          is_false_alarm_gt, gt_source_event_uid, created_at_utc)
                         VALUES (?, 'synthetic_vgi', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+                                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
                         """,
                         (
                             dataset_id,
@@ -499,17 +521,15 @@ def run_stochastic_network_simulation(
                             emerg,
                             f"Citizen witness #{w_idx + 1}: observed {cat_code.lower().replace('_', ' ')} near {best['segment_name']}.",
                             obs_rad,
-                            CANONICAL_EPSG,
+                            epsg,
                             rx_m,
                             ry_m,
                             rlon,
                             rlat,
-                            f"POINT ({rx_m:.3f} {ry_m:.3f})",
                             best["snapped_x_m"],
                             best["snapped_y_m"],
                             best["snapped_lon"],
                             best["snapped_lat"],
-                            f"POINT ({best['snapped_x_m']:.3f} {best['snapped_y_m']:.3f})",
                             best["segment_id"],
                             best["lixel_id"],
                             best["linear_offset_m"],
@@ -533,12 +553,21 @@ def run_stochastic_network_simulation(
                         (vgi_id, best["segment_id"], w_occ_dt.strftime("%Y-%m-%dT%H:%M:%SZ"), weather, surface, lighting),
                     )
 
-    # Specifically inject 2 deterministic overpass-crossing VGI reports (pedestrian/cyclist under City-Viadukt
-    # near X=477595, Y=5551955 where the overpass crosses Berliner Strasse!) so stewards can immediately inspect
-    # Probabilistic Topological Map-Matching overriding Naive Euclidean Nearest-Neighbor!
+    # Specifically inject 2 deterministic overpass-crossing VGI reports (pedestrian/cyclist on the
+    # surface street directly beneath an elevated expressway span) so stewards can immediately inspect
+    # Probabilistic Topological Map-Matching overriding Naive Euclidean Nearest-Neighbor.
+    # Two deterministic reports whose surface location sits directly beneath the elevated
+    # expressway span, so stewards can inspect topological map-matching overriding a naive
+    # Euclidean nearest-neighbour that would snap them to the overpass deck.
     overpass_demo_points = [
-        (477602.0, 5551954.0, "PEDESTRIAN_CROSSING", "MINOR_INJURY", "Pedestrian clipped at crosswalk directly beneath City-Viadukt overpass."),
-        (477594.0, 5552446.0, "CYCLIST_CONFLICT", "SERIOUS_INJURY", "Cyclist right-hook conflict on Anlagenring under elevated highway span."),
+        (
+            _DEMO_OX + 1782.0, _DEMO_OY + 1395.0, "PEDESTRIAN_CROSSING", "MINOR_INJURY",
+            "Pedestrian clipped at crosswalk directly beneath the elevated expressway span.",
+        ),
+        (
+            _DEMO_OX + 2102.0, _DEMO_OY + 2082.0, "CYCLIST_CONFLICT", "SERIOUS_INJURY",
+            "Cyclist right-hook conflict on the surface street under the elevated highway.",
+        ),
     ]
     for idx_ov, (ox, oy, ocat, osev, onarr) in enumerate(overpass_demo_points):
         c_uid, c_trust = citizen_users[idx_ov % len(citizen_users)]
@@ -567,13 +596,13 @@ def run_stochastic_network_simulation(
             (dataset_id, source_type, verification_status, reporter_user_id, category_id, severity_id,
              occurred_at_utc, reported_at_utc, reporting_lag_min, involved_vehicles, involved_pedestrians,
              involved_cyclists, emergency_response_present, narrative, observational_radius_m, srid,
-             raw_x_m, raw_y_m, raw_lon, raw_lat, raw_wkt_25832,
-             snapped_x_m, snapped_y_m, snapped_lon, snapped_lat, snapped_wkt_25832,
+             raw_x_m, raw_y_m, raw_lon, raw_lat,
+             snapped_x_m, snapped_y_m, snapped_lon, snapped_lat,
              snapped_segment_id, snapped_lixel_id, linear_offset_m, orthogonal_snap_dist_m,
              snap_probability, snap_candidates_json, vgi_credibility_score, witness_count,
              is_false_alarm_gt, gt_source_event_uid, created_at_utc)
             VALUES (?, 'synthetic_vgi', 'flagged_review', ?, ?, ?, ?, ?, 9.0, 1, ?, ?, 1, ?, 22.0, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
             """,
             (
                 dataset_id,
@@ -585,17 +614,15 @@ def run_stochastic_network_simulation(
                 1 if ocat == "PEDESTRIAN_CROSSING" else 0,
                 1 if ocat == "CYCLIST_CONFLICT" else 0,
                 onarr,
-                CANONICAL_EPSG,
+                epsg,
                 ox,
                 oy,
                 olon,
                 olat,
-                f"POINT ({ox:.3f} {oy:.3f})",
                 best["snapped_x_m"],
                 best["snapped_y_m"],
                 best["snapped_lon"],
                 best["snapped_lat"],
-                f"POINT ({best['snapped_x_m']:.3f} {best['snapped_y_m']:.3f})",
                 best["segment_id"],
                 best["lixel_id"],
                 best["linear_offset_m"],
@@ -621,8 +648,13 @@ def run_stochastic_network_simulation(
     # Inject unverified False Alarm VGI noise points (off-road / large lag / low credibility)
     for fa_idx in range(vgi_false_alarm_count):
         c_uid, _ = citizen_users[fa_idx % len(citizen_users)]
-        fx = round(float(rng.uniform(476650.0, 479380.0)), 3)
-        fy = round(float(rng.uniform(5550700.0, 5552950.0)), 3)
+        bbox = conn.execute(
+            "SELECT min(min_x) AS x0, max(max_x) AS x1, min(min_y) AS y0, max(max_y) AS y1 "
+            "FROM road_segments WHERE dataset_id = ?",
+            (dataset_id,),
+        ).fetchone()
+        fx = round(float(rng.uniform(bbox["x0"], bbox["x1"])), 3)
+        fy = round(float(rng.uniform(bbox["y0"], bbox["y1"])), 3)
         flon, flat = to_wgs84(fx, fy)
         obs_rad = round(float(rng.uniform(38.0, 75.0)), 1)
         lag_min = round(float(rng.uniform(95.0, 420.0)), 1)
@@ -651,13 +683,13 @@ def run_stochastic_network_simulation(
             (dataset_id, source_type, verification_status, reporter_user_id, category_id, severity_id,
              occurred_at_utc, reported_at_utc, reporting_lag_min, involved_vehicles, involved_pedestrians,
              involved_cyclists, emergency_response_present, narrative, observational_radius_m, srid,
-             raw_x_m, raw_y_m, raw_lon, raw_lat, raw_wkt_25832,
-             snapped_x_m, snapped_y_m, snapped_lon, snapped_lat, snapped_wkt_25832,
+             raw_x_m, raw_y_m, raw_lon, raw_lat,
+             snapped_x_m, snapped_y_m, snapped_lon, snapped_lat,
              snapped_segment_id, snapped_lixel_id, linear_offset_m, orthogonal_snap_dist_m,
              snap_probability, snap_candidates_json, vgi_credibility_score, witness_count,
              is_false_alarm_gt, gt_source_event_uid, created_at_utc)
             VALUES (?, 'synthetic_vgi', 'unverified_raw_vgi', ?, ?, ?, ?, ?, ?, 1, 0, 0, 0, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, NULL, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, NULL, ?)
             """,
             (
                 dataset_id,
@@ -669,17 +701,15 @@ def run_stochastic_network_simulation(
                 lag_min,
                 "Unverified noisy report: heard loud braking sound from adjacent block, exact spot uncertain.",
                 obs_rad,
-                CANONICAL_EPSG,
+                epsg,
                 fx,
                 fy,
                 flon,
                 flat,
-                f"POINT ({fx:.3f} {fy:.3f})",
                 best["snapped_x_m"],
                 best["snapped_y_m"],
                 best["snapped_lon"],
                 best["snapped_lat"],
-                f"POINT ({best['snapped_x_m']:.3f} {best['snapped_y_m']:.3f})",
                 best["segment_id"],
                 best["lixel_id"],
                 best["linear_offset_m"],
@@ -713,7 +743,7 @@ def run_stochastic_network_simulation(
         "name": ds_name,
         "scenario_key": scenario_key,
         "is_synthetic": True,
-        "crs_epsg": CANONICAL_EPSG,
+        "crs_epsg": epsg,
         "lixel_resolution_m": lixel_resolution_m,
         "random_seed": random_seed,
         "verified_crash_count": verified_count,

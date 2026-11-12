@@ -14,12 +14,14 @@ from shapely.geometry import LineString, Polygon
 from shapely.wkt import loads as wkt_loads
 
 from ..config import CANONICAL_EPSG
+from ..context import DatasetContext, dataset_context
 from ..crs import (
     compute_sinuosity,
     extract_lixel_linestring,
     interpolate_lrs_point,
-    linestring_25832_to_geojson_str,
-    polygon_25832_to_geojson_dict,
+    linestring_to_geojson_str,
+    polygon_to_geojson_dict,
+    to_metric,
     to_wgs84,
 )
 from ..db import utc_now_iso
@@ -81,81 +83,63 @@ def _curved_arc(
     return pts
 
 
-def build_frankfurt_synthetic_network_spec() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """
-    Construct a topologically rigorous urban road network in EPSG:25832 (Frankfurt am Main core):
-    - Surface urban grid + curved inner ring + parallel Main River quays + 3 river bridges (elevation 0)
-    - Grade-separated elevated motorway viaduct crossing OVER surface streets without false nodes (elevation 1)
-    """
-    # Grid base: X (Easting) 476,600 .. 479,400 (7 columns), Y (Northing) 5,550,600 .. 5,553,100
-    # Main River runs W->E between Y=5,551,250 and Y=5,551,430!
-    xs = [476600.0, 477080.0, 477550.0, 478020.0, 478490.0, 478960.0, 479420.0]
-    # Rows:
-    # r0=5550650 (Sachsenhausen South Arterial)
-    # r1=5551180 (Schaumainkai South Riverbank Quay)
-    # --- MAIN RIVER CHANNEL (Y ~ 5551240 .. 5551430) ---
-    # r2=5551500 (Mainkai North Riverbank Quay — parallel to r1 across river!)
-    # r3=5551950 (Berliner Strasse / Central Core Arterial)
-    # r4=5552450 (Zeil / Anlagenring Inner Ring Boulevard)
-    # r5=5552980 (Alleenring North Arterial)
-    ys = [5550650.0, 5551180.0, 5551500.0, 5551950.0, 5552450.0, 5552980.0]
+# ---------------------------------------------------------------------------------------------------
+# Seeded demo network: Tehran (EPSG:3857 metric, world-valid CRS)
+#
+# The network is an explicitly labelled synthetic realization used for demonstration and for
+# exercising the platform's geometry (river crossings, grade-separated expressway, one-way
+# corridors, dense local grid). It is NOT a survey of the real Tehran street network.
+# Any other city is supported by importing a GeoJSON road network (see services/ingest.py).
+# ---------------------------------------------------------------------------------------------------
+
+TEHRAN_DEMO_ORIGIN_3857 = (5719500.0, 4252000.0)  # metres, near Tehran city centre
+
+
+def _tehran_nodes_and_edges() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    ox, oy = TEHRAN_DEMO_ORIGIN_3857
+    # 6 x 5 lattice of 700 m blocks => ~3.5 km x 2.8 km demo extent.
+    xs = [ox + 700.0 * c for c in range(6)]
+    ys = [oy + 700.0 * r for r in range(5)]
 
     nodes: list[dict[str, Any]] = []
-    node_lookup: dict[str, tuple[float, float, int]] = {}
+    lookup: dict[str, tuple[float, float, int]] = {}
 
     for r_idx, y in enumerate(ys):
         for c_idx, x in enumerate(xs):
-            # Subtle organic urban perturbation (deterministic) so blocks aren't sterile squares
-            jx = ((r_idx * 7 + c_idx * 13) % 9 - 4) * 14.0 if r_idx not in (1, 2) else 0.0
-            jy = ((r_idx * 11 + c_idx * 5) % 9 - 4) * 12.0 if r_idx not in (1, 2) else 0.0
-            nx_m = round(x + jx, 2)
-            ny_m = round(y + jy, 2)
-            code = f"N_{r_idx}_{c_idx}"
-            if r_idx in (1, 2) and c_idx in (1, 3, 5):
+            # deterministic organic jitter so blocks are not sterile squares
+            jx = ((r_idx * 7 + c_idx * 13) % 9 - 4) * 9.0
+            jy = ((r_idx * 11 + c_idx * 5) % 9 - 4) * 8.0
+            if r_idx == 2 and c_idx in (2, 3):   # river valley: keep the quays straight
+                jx = jy = 0.0
+            px, py = round(x + jx, 2), round(y + jy, 2)
+            if r_idx in (2, 3) and c_idx in (1, 4):
                 ntype = "bridge_abutment"
-            elif r_idx in (0, 3, 5) and c_idx in (1, 3, 5):
+            elif r_idx in (0, 2, 4) and c_idx in (1, 3, 5):
                 ntype = "signalized_junction"
-            elif r_idx == 4 and c_idx in (2, 4):
+            elif r_idx == 3 and c_idx in (2, 4):
                 ntype = "roundabout"
             else:
                 ntype = "uncontrolled_junction"
-            nodes.append(
-                {
-                    "node_code": code,
-                    "node_type": ntype,
-                    "elevation_level": 0,
-                    "x_m": nx_m,
-                    "y_m": ny_m,
-                }
-            )
-            node_lookup[code] = (nx_m, ny_m, 0)
+            code = f"T_{r_idx}_{c_idx}"
+            nodes.append({"node_code": code, "node_type": ntype, "elevation_level": 0, "x_m": px, "y_m": py})
+            lookup[code] = (px, py, 0)
 
-    # Add Grade-Separated Elevated Viaduct Nodes (Elevation Level 1)
-    # Connects via ramps to N_0_2 (South Interchange) and N_5_2 (North Interchange),
-    # flying OVER r1, Main River, r2, r3, and r4 around X ~ 477,590 WITHOUT intersecting them!
-    overpass_nodes = [
-        ("N_OVP_S", "grade_separated_overpass", 1, 477585.0, 5550950.0),
-        ("N_OVP_M", "grade_separated_overpass", 1, 477605.0, 5551970.0),
-        ("N_OVP_N", "grade_separated_overpass", 1, 477580.0, 5552700.0),
+    # Grade-separated expressway (elevation 1) crossing the surface grid and the river.
+    elev_level1 = [
+        ("T_EXP_S", "grade_separated_expressway_node", 1, ox + 1750.0, oy - 260.0),
+        ("T_EXP_M", "grade_separated_expressway_node", 1, ox + 1780.0, oy + 1400.0),
+        ("T_EXP_N", "grade_separated_expressway_node", 1, ox + 1740.0, oy + 3040.0),
     ]
-    for code, ntype, elev, x_m, y_m in overpass_nodes:
-        nodes.append(
-            {
-                "node_code": code,
-                "node_type": ntype,
-                "elevation_level": elev,
-                "x_m": x_m,
-                "y_m": y_m,
-            }
-        )
-        node_lookup[code] = (x_m, y_m, elev)
+    for code, ntype, elev, x_m, y_m in elev_level1:
+        nodes.append({"node_code": code, "node_type": ntype, "elevation_level": elev, "x_m": x_m, "y_m": y_m})
+        lookup[code] = (x_m, y_m, elev)
 
     edges: list[dict[str, Any]] = []
-    e_counter = 1
+    counter = {"n": 0}
 
     def add_edge(
-        u_code: str,
-        v_code: str,
+        u: str,
+        v: str,
         name: str,
         road_class: str,
         speed_kmh: int,
@@ -163,195 +147,204 @@ def build_frankfurt_synthetic_network_spec() -> tuple[list[dict[str, Any]], list
         aadt: int,
         bulge_m: float = 0.0,
         elev: int = 0,
-        slope_pct: float = 0.5,
+        slope_pct: float = 0.4,
+        is_directed: int = 0,
     ) -> None:
-        nonlocal e_counter
-        ux, uy, _ = node_lookup[u_code]
-        vx, vy, _ = node_lookup[v_code]
+        counter["n"] += 1
+        ux, uy, _ = lookup[u]
+        vx, vy, _ = lookup[v]
         coords = _curved_arc((ux, uy), (vx, vy), bulge_m=bulge_m)
         edges.append(
             {
-                "edge_code": f"E_{e_counter:03d}",
+                "edge_code": f"TE_{counter['n']:03d}",
                 "name": name,
-                "u_code": u_code,
-                "v_code": v_code,
+                "u_code": u,
+                "v_code": v,
                 "road_class": road_class,
                 "speed_limit_kmh": speed_kmh,
                 "lanes": lanes,
                 "aadt": aadt,
                 "elevation_level": elev,
                 "slope_pct": slope_pct,
+                "is_directed": is_directed,
                 "coords": coords,
             }
         )
-        e_counter += 1
 
-    ew_names = [
-        ("Mörfelder Landstraße", "primary_arterial", 50, 4, 24500, 12.0),
-        ("Schaumainkai (South Quay)", "secondary_corridor", 40, 2, 13800, -8.0),
-        ("Mainkai (North Quay)", "secondary_corridor", 40, 2, 15200, 10.0),
-        ("Berliner Straße / Mainzer Landstr.", "primary_arterial", 50, 4, 29400, 6.0),
-        ("Anlagenring Boulevard", "secondary_corridor", 50, 3, 19800, 42.0),
-        ("Alleenring Nord", "primary_arterial", 60, 4, 33500, -18.0),
+    # East-west corridors (north to south), named after real Tehran arterials for orientation.
+    ew = [
+        ("Hemmat Expressway Service Road", "primary_arterial", 60, 4, 31500, -14.0),
+        ("Azadi Street", "primary_arterial", 50, 4, 27400, 9.0),
+        ("Enghelab Street", "secondary_corridor", 40, 3, 18900, -11.0),
+        ("Karimkhan Zand Street", "secondary_corridor", 40, 3, 17200, 13.0),
+        ("Shariati Street", "collector", 30, 2, 9600, 0.0),
     ]
-
-    # East-West Corridors
-    for r_idx, (rname, rclass, spd, lanes, base_aadt, bulge) in enumerate(ew_names):
+    for r_idx, (rname, rclass, spd, lanes, aadt, bulge) in enumerate(ew):
         for c_idx in range(len(xs) - 1):
-            u_c = f"N_{r_idx}_{c_idx}"
-            v_c = f"N_{r_idx}_{c_idx + 1}"
-            seg_bulge = bulge if (c_idx % 2 == 0) else -bulge * 0.7
-            seg_aadt = int(base_aadt * (0.88 + 0.06 * min(c_idx, 5 - c_idx)))
             add_edge(
-                u_c,
-                v_c,
-                f"{rname} [{c_idx + 1}]",
+                f"T_{r_idx}_{c_idx}",
+                f"T_{r_idx}_{c_idx + 1}",
+                f"{rname} ({c_idx + 2})",
                 rclass,
                 spd,
                 lanes,
-                seg_aadt,
-                bulge_m=seg_bulge,
+                int(aadt * (0.92 + 0.05 * (c_idx % 3))),
+                bulge_m=bulge,
             )
 
-    # North-South Surface Connections (NOTE: Between r1 and r2 is the MAIN RIVER!
-    # Only columns c=1 (Friedensbrücke), c=3 (Untermainbrücke), c=5 (Ignatz-Bubis-Brücke) cross the river!)
-    bridge_names = {
-        1: "Friedensbrücke",
-        3: "Untermainbrücke",
-        5: "Ignatz-Bubis-Brücke",
-    }
-    ns_names = [
-        ("Hafenstraße / Gutleut", "collector", 40, 2, 9200),
-        ("Stresemannallee / Messe-Achse", "primary_arterial", 50, 4, 26800),
-        ("Neue Mainzer Straße", "local_street", 30, 2, 5400),
-        ("Eschersheimer / Schweizer Str.", "primary_arterial", 50, 4, 28100),
-        ("Fahrgasse / Alte Gasse", "local_street", 30, 1, 4600),
-        ("Kurt-Schumacher / Konstabler", "secondary_corridor", 50, 3, 21200),
-        ("Ostend / Ratsweg Süd", "collector", 40, 2, 10500),
+    # North-south corridors, plus a one-way pair to exercise directed topology.
+    ns = [
+        ("Valiasr Street", "primary_arterial", 50, 4, 28800, 8.0, 0),
+        ("Keshavarz Boulevard", "secondary_corridor", 40, 2, 14100, -9.0, 1),
+        ("Mofatteh Street", "secondary_corridor", 40, 2, 15300, 12.0, -1),
+        ("Nezami Ganjavi Street", "primary_arterial", 50, 3, 19600, -6.0, 0),
+        ("Imam Ali Highway Ramp Street", "collector", 30, 2, 8800, 7.0, 0),
+        ("Baharestan Local Street", "local_street", 30, 1, 4200, 0.0, 0),
     ]
-
-    for c_idx, (cname, cclass, spd, lanes, base_aadt) in enumerate(ns_names):
+    for c_idx, (cname, rclass, spd, lanes, aadt, bulge, direction) in enumerate(ns):
         for r_idx in range(len(ys) - 1):
-            # River barrier between r=1 and r=2
-            if r_idx == 1 and c_idx not in bridge_names:
-                continue
-            u_c = f"N_{r_idx}_{c_idx}"
-            v_c = f"N_{r_idx + 1}_{c_idx}"
-            if r_idx == 1:
-                bname = bridge_names[c_idx]
-                add_edge(
-                    u_c,
-                    v_c,
-                    bname,
-                    "bridge_link",
-                    50,
-                    4 if c_idx == 1 else 3,
-                    int(base_aadt * 1.25),
-                    bulge_m=5.0,
-                    slope_pct=2.8,
-                )
-            else:
-                add_edge(
-                    u_c,
-                    v_c,
-                    f"{cname} [{r_idx + 1}]",
-                    cclass,
-                    spd,
-                    lanes,
-                    int(base_aadt * (0.9 + 0.05 * (r_idx % 3))),
-                    bulge_m=8.0 if cclass == "local_street" else 0.0,
-                )
+            add_edge(
+                f"T_{r_idx}_{c_idx}",
+                f"T_{r_idx + 1}_{c_idx}",
+                f"{cname} ({r_idx + 2})",
+                rclass,
+                spd,
+                lanes,
+                int(aadt * (0.9 + 0.06 * (r_idx % 3))),
+                bulge_m=bulge,
+                is_directed=1 if direction else 0,
+            )
 
-    # Diagonal Historic Boulevards (creating realistic 5-leg complex junctions!)
-    add_edge("N_2_1", "N_3_2", " Kaiserstraße Diagonal", "secondary_corridor", 40, 2, 16400, bulge_m=15.0)
-    add_edge("N_3_3", "N_4_4", "Zeil-Ost Diagonal", "collector", 30, 2, 11900, bulge_m=-20.0)
-    add_edge("N_4_1", "N_5_2", "Bockenheimer Landstr.", "secondary_corridor", 50, 3, 18700, bulge_m=18.0)
+    # River quays (south and north banks) around rows 2 and 3 with three bridges between them.
+    for c_idx in range(len(xs) - 1):
+        add_edge(
+            f"T_2_{c_idx}", f"T_2_{c_idx + 1}",
+            f"South Riverbank Quay ({c_idx + 2})", "secondary_corridor", 40, 2, 11200, bulge_m=-6.0,
+        )
+        add_edge(
+            f"T_3_{c_idx}", f"T_3_{c_idx + 1}",
+            f"North Riverbank Quay ({c_idx + 2})", "secondary_corridor", 40, 2, 12400, bulge_m=7.0,
+        )
+    for c_idx, bname in ((1, "Tabiat Crossing"), (2, "Pol-e Sefid Bridge"), (4, "Pol-e Char Bagh Bridge")):
+        add_edge(
+            f"T_2_{c_idx}", f"T_3_{c_idx}",
+            bname, "bridge_link", 40, 2, 16800, bulge_m=4.0,
+        )
 
-    # Grade-Separated Elevated Viaduct (Westkreuz / City-Spange Overpass, elevation_level=1)
-    # Ramps connect at N_0_2 and N_5_2; middle spans fly OVER surface corridors r1, r2, r3, r4!
-    add_edge("N_0_2", "N_OVP_S", "City-Viadukt Ramp Süd", "motorway_overpass", 70, 2, 36200, elev=1, slope_pct=4.2)
-    add_edge("N_OVP_S", "N_OVP_M", "City-Viadukt Elevated Span Süd", "motorway_overpass", 80, 4, 44800, bulge_m=22.0, elev=1, slope_pct=0.8)
-    add_edge("N_OVP_M", "N_OVP_N", "City-Viadukt Elevated Span Nord", "motorway_overpass", 80, 4, 43900, bulge_m=-18.0, elev=1, slope_pct=0.8)
-    add_edge("N_OVP_N", "N_5_2", "City-Viadukt Ramp Nord", "motorway_overpass", 70, 2, 35400, elev=1, slope_pct=-4.1)
+    # Grade-separated urban expressway with ramps at the south and north ends.
+    add_edge("T_0_2", "T_EXP_S", "Sadr Expressway Ramp South", "motorway_overpass", 70, 2, 35100, elev=1, slope_pct=4.0)
+    add_edge("T_EXP_S", "T_EXP_M", "Sadr Expressway Elevated Span South", "motorway_overpass", 80, 4, 44200, bulge_m=18.0, elev=1, slope_pct=0.7)
+    add_edge("T_EXP_M", "T_EXP_N", "Sadr Expressway Elevated Span North", "motorway_overpass", 80, 4, 43100, bulge_m=-14.0, elev=1, slope_pct=0.7)
+    add_edge("T_EXP_N", "T_4_2", "Sadr Expressway Ramp North", "motorway_overpass", 70, 2, 33900, elev=1, slope_pct=-3.8)
+
+    # Diagonal historic boulevards producing realistic 5-leg junctions.
+    add_edge("T_0_1", "T_1_2", "Enghelab–Azadi Diagonal", "secondary_corridor", 40, 2, 15200, bulge_m=11.0)
+    add_edge("T_1_3", "T_2_4", "Valiasr–Karimkhan Diagonal", "collector", 30, 2, 10400, bulge_m=-13.0)
 
     return nodes, edges
 
 
-def get_study_area_context_geojson() -> dict[str, Any]:
+def build_tehran_demo_network_spec() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Seeded, explicitly synthetic Tehran demo network (metric EPSG:3857)."""
+    return _tehran_nodes_and_edges()
+
+
+NETWORK_GENERATORS = {
+    "tehran_demo_v1": build_tehran_demo_network_spec,
+}
+
+
+def generate_synthetic_network(generator_key: str = "tehran_demo_v1"):
+    """Return a `(nodes, edges)` spec for a named synthetic network generator.
+
+    The registry keeps synthetic demo networks pluggable: Tehran ships as `tehran_demo_v1`,
+    and any other city can be added without touching the ingestion pipeline.
     """
-    Generate self-contained cartographic context features in EPSG:4326 (projected from EPSG:25832):
-    - Main River hydrographic channel
-    - Urban green belt parks (Wallanlagen, Hafenpark, Louisa Park)
-    - Metric 500m ETRS89 / UTM 32N coordinate graticule lines
+    try:
+        factory = NETWORK_GENERATORS[generator_key]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown synthetic network generator '{generator_key}'. "
+            f"Available: {', '.join(sorted(NETWORK_GENERATORS))}"
+        ) from exc
+    return factory()
+
+
+def get_study_area_context_geojson(
+    context: DatasetContext | None = None,
+    *,
+    demo_network: str | None = "tehran_demo_v1",
+) -> dict[str, Any]:
+    """Self-contained cartographic context: river, parks, and metric graticule.
+
+    The context is derived from the dataset CRS + study-area metadata rather than from a
+    hard-coded city, so any study area renders without new code.
     """
+    epsg = context.canonical_epsg if context else CANONICAL_EPSG
+    area = context.study_area if context else None
+    center = area.center_4326 if area else (51.3890, 35.6892)
+    cx, cy = to_metric(center[0], center[1], epsg)
+
     features: list[dict[str, Any]] = []
 
-    # Main River Polygon (between r1=5551180 and r2=5551500)
-    river_north = [
-        (476350.0, 5551435.0),
-        (477100.0, 5551445.0),
-        (477850.0, 5551425.0),
-        (478650.0, 5551448.0),
-        (479650.0, 5551430.0),
-    ]
-    river_south = [
-        (479650.0, 5551245.0),
-        (478650.0, 5551265.0),
-        (477850.0, 5551240.0),
-        (477100.0, 5551260.0),
-        (476350.0, 5551250.0),
-    ]
-    river_poly = Polygon(river_north + river_south + [river_north[0]])
-    features.append(
-        {
-            "type": "Feature",
-            "properties": {"feature_class": "river", "name": "Main River (Bundeswasserstraße)"},
-            "geometry": polygon_25832_to_geojson_dict(river_poly),
-        }
-    )
-
-    # Urban Parks
-    parks = [
-        (
-            "Wallanlagen Inner Greenbelt",
-            Polygon([(477350, 5552330), (478650, 5552330), (478650, 5552560), (477350, 5552560)]),
-        ),
-        (
-            "Osthafenpark",
-            Polygon([(479020, 5551530), (479520, 5551530), (479520, 5551890), (479020, 5551890)]),
-        ),
-        (
-            "Metzlerpark Museumsufer",
-            Polygon([(477620, 5551010), (478320, 5551010), (478320, 5551160), (477620, 5551160)]),
-        ),
-    ]
-    for pname, ppoly in parks:
+    if demo_network in NETWORK_GENERATORS:
+        ox, oy = TEHRAN_DEMO_ORIGIN_3857
+        # River polygon between the demo quay rows (y = oy + 1400 .. oy + 2100).
+        river_north = [(ox + 150, oy + 2070), (ox + 1100, oy + 2085), (ox + 2100, oy + 2065), (ox + 3450, oy + 2080)]
+        river_south = [(ox + 3450, oy + 1900), (ox + 2100, oy + 1915), (ox + 1100, oy + 1895), (ox + 150, oy + 1905)]
+        river_poly = Polygon(river_north + river_south + [river_north[0]])
         features.append(
             {
                 "type": "Feature",
-                "properties": {"feature_class": "park", "name": pname},
-                "geometry": polygon_25832_to_geojson_dict(ppoly),
+                "properties": {
+                    "feature_class": "river",
+                    "name": "Demo river channel (synthetic geometry)",
+                    "is_synthetic": True,
+                },
+                "geometry": polygon_to_geojson_dict(river_poly, epsg),
             }
         )
+        parks = [
+            (
+                "Demo riverside park (north bank)",
+                Polygon([(ox + 700, oy + 2200), (ox + 1700, oy + 2200), (ox + 1700, oy + 2650), (ox + 700, oy + 2650)]),
+            ),
+            (
+                "Demo urban park (south bank)",
+                Polygon([(ox + 2300, oy + 980), (ox + 3050, oy + 980), (ox + 3050, oy + 1500), (ox + 2300, oy + 1500)]),
+            ),
+        ]
+        for pname, poly in parks:
+            features.append(
+                {
+                    "type": "Feature",
+                    "properties": {"feature_class": "park", "name": pname, "is_synthetic": True},
+                    "geometry": polygon_to_geojson_dict(poly, epsg),
+                }
+            )
 
-    # Metric 500m ETRS89 / UTM 32N Graticule Lines
-    for x in range(476500, 480000, 500):
-        c0 = to_wgs84(x, 5550400)
-        c1 = to_wgs84(x, 5553200)
+    # 500 m metric graticule around the study-area centre (works in any projected CRS).
+    gx0 = math.floor((cx - 4000.0) / 500.0) * 500.0
+    gy0 = math.floor((cy - 4000.0) / 500.0) * 500.0
+    for i in range(17):
+        x = gx0 + 500.0 * i
+        c0 = to_wgs84(x, gy0, epsg)
+        c1 = to_wgs84(x, gy0 + 8000.0, epsg)
         features.append(
             {
                 "type": "Feature",
-                "properties": {"feature_class": "graticule", "label": f"E {x:,}m"},
+                "properties": {"feature_class": "graticule", "label": f"E {x:,.0f} m"},
                 "geometry": {"type": "LineString", "coordinates": [list(c0), list(c1)]},
             }
         )
-    for y in range(5550500, 5553500, 500):
-        c0 = to_wgs84(476400, y)
-        c1 = to_wgs84(479600, y)
+    for j in range(17):
+        y = gy0 + 500.0 * j
+        c0 = to_wgs84(gx0, y, epsg)
+        c1 = to_wgs84(gx0 + 8000.0, y, epsg)
         features.append(
             {
                 "type": "Feature",
-                "properties": {"feature_class": "graticule", "label": f"N {y:,}m"},
+                "properties": {"feature_class": "graticule", "label": f"N {y:,.0f} m"},
                 "geometry": {"type": "LineString", "coordinates": [list(c0), list(c1)]},
             }
         )
@@ -359,21 +352,29 @@ def get_study_area_context_geojson() -> dict[str, Any]:
     return {"type": "FeatureCollection", "features": features}
 
 
-def create_network_and_lixels(
+def _dataset_epsg(conn: sqlite3.Connection, dataset_id: int) -> int:
+    return dataset_context(conn, dataset_id).canonical_epsg
+
+
+def persist_network_spec(
     conn: sqlite3.Connection,
     *,
     dataset_id: int,
+    nodes_spec: list[dict[str, Any]],
+    edges_spec: list[dict[str, Any]],
     lixel_resolution_m: float = 25.0,
     rng_seed: int = 42,
+    source: str = "seeded_demo",
 ) -> dict[str, Any]:
-    """
-    Populate road_nodes, road_segments, traffic_observations, and uniform LRS road_lixels
-    for a dataset in canonical EPSG:25832 meters.
+    """Persist an arbitrary road network (any city, any metric CRS) plus uniform LRS lixels.
+
+    ``nodes_spec``/``edges_spec`` are CRS-neutral: coordinates are metric in the dataset's own
+    canonical EPSG, so the same writer serves the seeded demo network, imports from GeoJSON and
+    any future data source.
     """
     rng = np.random.default_rng(rng_seed)
-    nodes_spec, edges_spec = build_frankfurt_synthetic_network_spec()
+    epsg = _dataset_epsg(conn, dataset_id)
 
-    # Compute node degrees from edges_spec
     deg_map: dict[str, int] = {n["node_code"]: 0 for n in nodes_spec}
     for e in edges_spec:
         deg_map[e["u_code"]] = deg_map.get(e["u_code"], 0) + 1
@@ -381,12 +382,12 @@ def create_network_and_lixels(
 
     node_code_to_id: dict[str, int] = {}
     for n in nodes_spec:
-        lon, lat = to_wgs84(n["x_m"], n["y_m"])
-        wkt = f"POINT ({n['x_m']:.3f} {n['y_m']:.3f})"
+        lon, lat = to_wgs84(n["x_m"], n["y_m"], epsg)
+        wkt = f"POINT ({float(n['x_m']):.3f} {float(n['y_m']):.3f})"
         cur = conn.execute(
             """
             INSERT INTO road_nodes
-            (dataset_id, node_code, node_type, degree, elevation_level, srid, x_m, y_m, lon, lat, wkt_25832)
+            (dataset_id, node_code, node_type, degree, elevation_level, srid, x_m, y_m, lon, lat, wkt_m)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -394,10 +395,10 @@ def create_network_and_lixels(
                 n["node_code"],
                 n["node_type"],
                 deg_map.get(n["node_code"], 0),
-                n["elevation_level"],
-                CANONICAL_EPSG,
-                n["x_m"],
-                n["y_m"],
+                int(n.get("elevation_level", 0)),
+                epsg,
+                float(n["x_m"]),
+                float(n["y_m"]),
                 lon,
                 lat,
                 wkt,
@@ -405,24 +406,28 @@ def create_network_and_lixels(
         )
         node_code_to_id[n["node_code"]] = int(cur.lastrowid)
 
-    # Build node graph to compute exact network distance to nearest true junction (degree >= 3)
     g_nodes = nx.Graph()
     segment_records: list[dict[str, Any]] = []
     now = utc_now_iso()
 
     for idx, e in enumerate(edges_spec):
-        line = LineString(e["coords"])
+        coords = [(float(x), float(y)) for x, y in e["coords"]]
+        if len(coords) < 2:
+            continue
+        line = LineString(coords)
         length_m = round(float(line.length), 3)
+        if length_m <= 0:
+            continue
         sinuosity = compute_sinuosity(line)
         min_x, min_y, max_x, max_y = line.bounds
-        geojson_str = linestring_25832_to_geojson_str(line)
+        geojson_str = linestring_to_geojson_str(line, epsg)
         u_id = node_code_to_id[e["u_code"]]
         v_id = node_code_to_id[e["v_code"]]
 
-        # Simulate realistic partial AADT sensor missingness / imputation on ~14% of local/collector edges
-        # so Epic 5 Epistemic Uncertainty & Exposure Coverage layers have authentic empirical contrast!
+        # Partial AADT sensor missingness/imputation keeps the epistemic-uncertainty layers
+        # empirically contrasted instead of assuming complete exposure coverage.
         has_direct_sensor = not (e["road_class"] in ("local_street", "collector") and (idx % 5 == 0))
-        aadt_val = int(e["aadt"] * rng.uniform(0.94, 1.06))
+        aadt_val = int(float(e.get("aadt") or 8000) * rng.uniform(0.94, 1.06))
         stored_seg_aadt = aadt_val if has_direct_sensor else None
 
         cur = conn.execute(
@@ -430,8 +435,8 @@ def create_network_and_lixels(
             INSERT INTO road_segments
             (dataset_id, edge_code, name, u_node_id, v_node_id, is_directed, road_class,
              speed_limit_kmh, lanes, length_m, sinuosity, slope_pct, elevation_level, aadt,
-             srid, min_x, max_x, min_y, max_y, wkt_25832, geojson_4326)
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             srid, min_x, max_x, min_y, max_y, wkt_m, geojson_4326, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dataset_id,
@@ -439,26 +444,27 @@ def create_network_and_lixels(
                 e["name"],
                 u_id,
                 v_id,
+                1 if int(e.get("is_directed", 0)) else 0,
                 e["road_class"],
-                e["speed_limit_kmh"],
-                e["lanes"],
+                int(e["speed_limit_kmh"]),
+                int(e["lanes"]),
                 length_m,
                 sinuosity,
-                e["slope_pct"],
-                e["elevation_level"],
+                float(e.get("slope_pct", 0.0)),
+                int(e.get("elevation_level", 0)),
                 stored_seg_aadt,
-                CANONICAL_EPSG,
+                epsg,
                 round(min_x, 3),
                 round(max_x, 3),
                 round(min_y, 3),
                 round(max_y, 3),
                 line.wkt,
                 geojson_str,
+                source,
             ),
         )
         seg_id = int(cur.lastrowid)
 
-        # Insert traffic_observations row (imputed with lower confidence when no permanent loop detector)
         mvkt_annual = round((aadt_val * 365.0 * (length_m / 1000.0)) / 1_000_000.0, 5)
         cov_conf = round(float(rng.uniform(0.88, 0.99)) if has_direct_sensor else float(rng.uniform(0.42, 0.58)), 3)
         conn.execute(
@@ -466,14 +472,14 @@ def create_network_and_lixels(
             INSERT INTO traffic_observations
             (dataset_id, segment_id, observation_period, aadt_vehicles_per_day, peak_hour_volume,
              avg_speed_kmh, heavy_vehicle_pct, exposure_mvkt_annual, coverage_confidence, is_imputed, observed_at_utc)
-            VALUES (?, ?, '2026-Annual', ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, 'Annual', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dataset_id,
                 seg_id,
                 aadt_val,
                 int(aadt_val * 0.088),
-                round(e["speed_limit_kmh"] * float(rng.uniform(0.76, 0.94)), 1),
+                round(float(e["speed_limit_kmh"]) * float(rng.uniform(0.76, 0.94)), 1),
                 round(float(rng.uniform(3.0, 14.5)) if e["road_class"] != "local_street" else 1.8, 1),
                 mvkt_annual,
                 cov_conf,
@@ -490,28 +496,28 @@ def create_network_and_lixels(
                 "v_id": v_id,
                 "line": line,
                 "length_m": length_m,
-                "elevation_level": e["elevation_level"],
+                "elevation_level": int(e.get("elevation_level", 0)),
             }
         )
 
-    # Shortest network distance from every node to nearest true surface junction (degree >= 3 and elevation == 0)
     junction_node_ids = [
         node_code_to_id[n["node_code"]]
         for n in nodes_spec
-        if deg_map.get(n["node_code"], 0) >= 3 and n["elevation_level"] == 0
+        if deg_map.get(n["node_code"], 0) >= 3 and int(n.get("elevation_level", 0)) == 0
     ]
-    dist_node_to_junc: dict[int, float] = nx.multi_source_dijkstra_path_length(
-        g_nodes, sources=junction_node_ids, weight="weight"
+    dist_node_to_junc: dict[int, float] = (
+        nx.multi_source_dijkstra_path_length(g_nodes, sources=junction_node_ids, weight="weight")
+        if junction_node_ids
+        else {}
     )
 
-    # Dynamic LRS Lixel Subdivision
     lixel_rows: list[tuple[Any, ...]] = []
     for seg in segment_records:
         L = seg["length_m"]
         n_lix = max(1, int(round(L / lixel_resolution_m)))
         step = L / n_lix
-        d_u = dist_node_to_junc.get(seg["u_id"], 500.0)
-        d_v = dist_node_to_junc.get(seg["v_id"], 500.0)
+        d_u = dist_node_to_junc.get(seg["u_id"], min(500.0, L))
+        d_v = dist_node_to_junc.get(seg["v_id"], min(500.0, L))
 
         for k in range(n_lix):
             m_start = round(k * step, 4)
@@ -521,10 +527,8 @@ def create_network_and_lixels(
 
             lix_geom = extract_lixel_linestring(seg["line"], m_start, m_end)
             mid_x, mid_y = interpolate_lrs_point(seg["line"], m_mid)
-            mid_lon, mid_lat = to_wgs84(mid_x, mid_y)
+            mid_lon, mid_lat = to_wgs84(mid_x, mid_y, epsg)
             lmin_x, lmin_y, lmax_x, lmax_y = lix_geom.bounds
-
-            # Exact shortest-path network distance from lixel midpoint (e, m_mid) to nearest junction
             d_junc = min(d_u + m_mid, d_v + (L - m_mid))
 
             lixel_rows.append(
@@ -538,7 +542,7 @@ def create_network_and_lixels(
                     m_mid,
                     round(float(d_junc), 3),
                     0.0,
-                    CANONICAL_EPSG,
+                    epsg,
                     mid_x,
                     mid_y,
                     mid_lon,
@@ -548,7 +552,7 @@ def create_network_and_lixels(
                     round(lmin_y, 3),
                     round(lmax_y, 3),
                     lix_geom.wkt,
-                    linestring_25832_to_geojson_str(lix_geom),
+                    linestring_to_geojson_str(lix_geom, epsg),
                 )
             )
 
@@ -557,7 +561,7 @@ def create_network_and_lixels(
         INSERT INTO road_lixels
         (dataset_id, parent_segment_id, lixel_index, m_start_m, m_end_m, length_m, midpoint_m,
          dist_to_nearest_junction_m, true_lambda_per_km_yr, srid, mid_x_m, mid_y_m, mid_lon, mid_lat,
-         min_x, max_x, min_y, max_y, wkt_25832, geojson_4326)
+         min_x, max_x, min_y, max_y, wkt_m, geojson_4326)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         lixel_rows,
@@ -569,7 +573,30 @@ def create_network_and_lixels(
         "segment_count": len(segment_records),
         "lixel_count": len(lixel_rows),
         "total_network_length_km": round(sum(s["length_m"] for s in segment_records) / 1000.0, 3),
+        "crs_epsg": epsg,
     }
+
+
+def create_network_and_lixels(
+    conn: sqlite3.Connection,
+    *,
+    dataset_id: int,
+    lixel_resolution_m: float = 25.0,
+    rng_seed: int = 42,
+    network_generator: str = "tehran_demo_v1",
+) -> dict[str, Any]:
+    """Populate a dataset's road network from a named seeded generator."""
+    builder = NETWORK_GENERATORS.get(network_generator, build_tehran_demo_network_spec)
+    nodes_spec, edges_spec = builder()
+    return persist_network_spec(
+        conn,
+        dataset_id=dataset_id,
+        nodes_spec=nodes_spec,
+        edges_spec=edges_spec,
+        lixel_resolution_m=lixel_resolution_m,
+        rng_seed=rng_seed,
+        source="seeded_demo",
+    )
 
 
 def get_lixel_network_topology(conn: sqlite3.Connection, dataset_id: int) -> LixelNetworkTopology:
@@ -589,7 +616,7 @@ def get_lixel_network_topology(conn: sqlite3.Connection, dataset_id: int) -> Lix
         """
         SELECT s.id, s.edge_code, s.name, s.u_node_id, s.v_node_id, s.road_class,
                s.speed_limit_kmh, s.lanes, s.length_m, s.sinuosity, s.slope_pct,
-               s.elevation_level, s.aadt, s.wkt_25832,
+               s.elevation_level, s.aadt, s.wkt_m,
                t.aadt_vehicles_per_day AS obs_aadt, t.exposure_mvkt_annual,
                t.coverage_confidence, t.is_imputed
         FROM road_segments s
@@ -626,7 +653,7 @@ def get_lixel_network_topology(conn: sqlite3.Connection, dataset_id: int) -> Lix
             "exposure_mvkt_annual": float(r["exposure_mvkt_annual"] or 1.0),
             "coverage_confidence": float(r["coverage_confidence"] or 0.7),
             "is_imputed": bool(r["is_imputed"]),
-            "geom_25832": wkt_loads(r["wkt_25832"]),
+            "geom_m": wkt_loads(r["wkt_m"]),
         }
 
     node_dist_cache = dict(nx.all_pairs_dijkstra_path_length(road_graph, weight="weight"))

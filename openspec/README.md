@@ -16,6 +16,7 @@
 | [surrogate-safety-fusion](changes/surrogate-safety-fusion/) | شاخص‌های جایگزین ایمنی |
 | [reproducible-research-benchmarks](changes/reproducible-research-benchmarks/) | محک‌زنی چندبذری، چندمقیاسه و PAI |
 | [advanced-network-research](changes/advanced-network-research/) | روش‌های تکمیلی Voronoi، link–node، HMM و GNN |
+| [tehran-citizen-reporting](changes/tehran-citizen-reporting/) | منطقهٔ مطالعاتی تهران، گزارش‌دهی شهروندی و درون‌ریزی داده بدون محدودیت مکانی |
 
 هر change شامل `proposal.md`، `design.md`، `tasks.md` و یک delta spec با سناریوهای پذیرش است. چک‌باکس‌های باز به معنای کارهای انجام‌نشده هستند. نام، وابستگی و ترتیب را با برنامه تطبیق دهید؛ اجرای یک change نباید قابلیت change دیگر را به‌طور ضمنی تکمیل فرض کند.
 

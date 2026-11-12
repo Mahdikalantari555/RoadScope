@@ -11,7 +11,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("ROADSCOPE_DEMO_MODE", "false")
     monkeypatch.setenv(
         "ROADSCOPE_API_TOKENS",
-        json.dumps({"test-citizen-secret": "citizen_maya", "test-steward-secret": "steward_krause"}),
+        json.dumps({"test-citizen-secret": "citizen_maya", "test-steward-secret": "steward_lead"}),
     )
     import app.config
     import app.db
@@ -116,13 +116,43 @@ def test_allocation_invalidation(client):
         assert second["allocations"][0]["lixel_id"] == lids[1]
 
 
-def test_demo_refuses_real_data(client, monkeypatch):
+def test_demo_refuses_real_data_tampering_but_keeps_open_ingestion(client, monkeypatch):
+    """Demo mode protects dataset generation, not the citizen-reporting pipeline.
+
+    The demo instance must never *generate* or swap in non-synthetic datasets behind users'
+    backs, but a real imported network (the point of the region-agnostic change) must remain
+    readable and reportable: otherwise importing one OSM extract would brick the demo UI.
+    """
     monkeypatch.setenv("ROADSCOPE_DEMO_MODE", "true")
     from app.db import db_session
 
     with db_session() as conn:
         conn.execute("UPDATE dataset_sources SET is_synthetic=0")
-    assert client.get("/api/v1/meta").status_code == 503
+
+    refused = client.post(
+        "/api/v1/simulator/generate",
+        json={"n_events": 5, "seed": 7, "activate": False},
+    )
+    assert refused.status_code == 503
+    assert "non-synthetic" in refused.text
+
+    meta = client.get("/api/v1/meta").json()
+    assert meta["ingestion_scope"] == "worldwide"
+    assert meta["active_dataset"]["is_synthetic"] is False
+
+    report = client.post(
+        "/api/v1/vgi/submit",
+        json={
+            "lon": 51.3891,
+            "lat": 35.6892,
+            "observational_radius_m": 15.0,
+            "occurred_at_utc": "2026-11-09T10:00:00Z",
+            "reported_at_utc": "2026-11-09T10:05:00Z",
+            "category_code": "REAR_END",
+            "severity_code": "PDO",
+        },
+    )
+    assert report.status_code == 200, report.text
 
 
 def test_topology_restriction_refresh_and_trusted_audit(client):
@@ -149,7 +179,7 @@ def test_topology_restriction_refresh_and_trusted_audit(client):
     )
     assert response.status_code == 200, response.text
     with db_session() as conn:
-        user = conn.execute("SELECT id FROM users WHERE username='steward_krause'").fetchone()[0]
+        user = conn.execute("SELECT id FROM users WHERE username='steward_lead'").fetchone()[0]
         audit = conn.execute("SELECT actor_user_id,actor_role FROM audit_logs ORDER BY id DESC LIMIT 1").fetchone()
         assert audit["actor_user_id"] == user
         assert audit["actor_role"] == "data_steward"
