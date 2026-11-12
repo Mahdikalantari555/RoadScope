@@ -56,7 +56,6 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
   const [narrative, setNarrative] = useState<string>(
     'Observed conflict near crosswalk; reporting approximate position from sidewalk.'
   );
-  const [attachmentName, setAttachmentName] = useState<string>('witness_scene_photo.jpg');
 
   const [candidates, setCandidates] = useState<SnapCandidate[]>([]);
   const [selectedSegId, setSelectedSegId] = useState<number | null>(null);
@@ -152,13 +151,13 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
         road_surface: surface,
         lighting_condition: lighting,
         narrative,
-        attachment_filenames: attachmentName.trim() ? [attachmentName.trim()] : [],
+        attachment_filenames: [],
         selected_segment_id: selectedSegId,
         actor_role: activeRole,
       });
       setFeedback({
         type: 'ok',
-        msg: `#${res.accident_id} (Credibility=${res.vgi_credibility_score}, EXIF stripped)`,
+        msg: `#${res.accident_id} (Credibility=${res.vgi_credibility_score})`,
       });
       onReportSubmittedOrCorroborated();
     } catch (err) {
@@ -508,14 +507,9 @@ export const CitizenReportWorkspace: React.FC<CitizenReportWorkspaceProps> = ({
             onChange={(e) => setNarrative(e.target.value)}
             className="w-full px-2 py-1 rounded border border-slate-700 bg-slate-950 text-[11px]"
           />
-          <input
-            type="text"
-            dir="ltr"
-            placeholder={copy.mediaPlaceholder}
-            value={attachmentName}
-            onChange={(e) => setAttachmentName(e.target.value)}
-            className="mt-1 w-full px-2 py-1 rounded border border-slate-700 bg-slate-950 font-mono text-[10px]"
-          />
+          <p className="mt-1 text-[10px] opacity-70">
+            {language === 'fa' ? 'در این نسخه بارگذاری عکس پشتیبانی نمی‌شود.' : 'Photo uploads are not supported in this version.'}
+          </p>
         </div>
 
         <button

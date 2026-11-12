@@ -16,6 +16,7 @@ import type { DatasetSource, PersonaRole, PersonaUser, WorkspaceMode } from '../
 import { useLanguage } from '../i18n';
 import type { MessageKey } from '../i18n';
 import { ResearchAccess } from './ResearchAccess';
+import { MethodsHelp } from './MethodsHelp';
 
 interface HeaderBarProps {
   activeWorkspace: WorkspaceMode;
@@ -124,6 +125,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
 
       {/* Right: Research Dialog + Dataset Selector + Persona + Language + Theme */}
       <div className="flex items-center gap-2 flex-wrap">
+        <MethodsHelp />
         <ResearchAccess />
 
         <div

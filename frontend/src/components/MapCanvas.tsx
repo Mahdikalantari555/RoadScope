@@ -32,6 +32,7 @@ interface VgiDraftMapOverlay {
 
 interface MapCanvasProps {
   darkMode: boolean;
+  isSynthetic: boolean;
   contextGeojson: GeoJSON.FeatureCollection;
   networkLayers: NetworkLayersPayload | null;
   incidentsGeojson: GeoJSON.FeatureCollection | null;
@@ -80,6 +81,7 @@ const OVERLAY_LABELS: { value: MapOverlayMode; label: string; group: string }[] 
 
 export const MapCanvas: React.FC<MapCanvasProps> = ({
   darkMode,
+  isSynthetic,
   contextGeojson,
   networkLayers,
   incidentsGeojson,
@@ -112,6 +114,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
   const [mapLoaded, setMapLoaded] = useState(false);
   const [webglError, setWebglError] = useState<string | null>(null);
+  const [showBasemap, setShowBasemap] = useState(true);
+  const [segmentSearch, setSegmentSearch] = useState('');
   const [showGraticule, setShowGraticule] = useState(true);
   const [showNodes, setShowNodes] = useState(false);
   const [showVgiVectors, setShowVgiVectors] = useState(true);
@@ -156,7 +160,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         container: containerRef.current,
         style: {
           version: 8,
-          sources: {},
+          sources: {
+            'osm-basemap': {
+              type: 'raster',
+              tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+              tileSize: 256,
+              maxzoom: 19,
+              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>',
+            },
+          },
           layers: [
             {
               id: 'background-fill',
@@ -165,13 +177,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 'background-color': darkMode ? '#070b14' : '#f1f5f9',
               },
             },
+            { id: 'osm-basemap-layer', type: 'raster', source: 'osm-basemap' },
           ],
         },
         center: [8.6885, 50.1155],
         zoom: 13.65,
         minZoom: 11.5,
         maxZoom: 18.5,
-        attributionControl: false,
+        attributionControl: { compact: true },
       });
 
       map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
@@ -1020,6 +1033,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     }
   }, [overlayMode, mapLoaded]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    map.setLayoutProperty('osm-basemap-layer', 'visibility', showBasemap ? 'visible' : 'none');
+  }, [showBasemap, mapLoaded]);
+
   // Enable/Disable Map Pan during Box Select Drag
   useEffect(() => {
     const map = mapRef.current;
@@ -1161,6 +1180,50 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               </option>
             ))}
           </select>
+
+          <label className="flex items-center gap-2 mt-2 text-xs cursor-pointer">
+            <input type="checkbox" checked={showBasemap} onChange={(e) => setShowBasemap(e.target.checked)} />
+            {language === 'fa' ? 'نقشهٔ پایه OpenStreetMap' : 'OpenStreetMap basemap'}
+          </label>
+          {showBasemap && (
+            <p className="mt-1 text-[10px] opacity-75" role="note">
+              {language === 'fa'
+                ? 'نقشهٔ پایه آنلاین است و درخواست کاشی‌ها به OpenStreetMap ارسال می‌شود.'
+                : 'Online basemap: tile requests are sent to OpenStreetMap.'}
+              {isSynthetic && (language === 'fa'
+                ? ' شبکه و رخدادهای مصنوعی ممکن است با خیابان‌های واقعی منطبق نباشند.'
+                : ' Synthetic roads and incidents may not align with real streets.')}
+            </p>
+          )}
+
+          <label className="block mt-2 text-[10px] opacity-80" htmlFor="segment-search">
+            {language === 'fa' ? 'جست‌وجو در شبکهٔ مجموعه‌داده' : 'Search dataset road network'}
+          </label>
+          <input id="segment-search" type="search" value={segmentSearch} onChange={(e) => setSegmentSearch(e.target.value)}
+            placeholder={language === 'fa' ? 'نام یا شناسهٔ قطعه' : 'Road name or segment ID'}
+            className={`w-full mt-1 px-2 py-1 rounded border text-xs ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-300'}`} />
+          {segmentSearch.trim() && (
+            <div className="mt-1 max-h-28 overflow-y-auto" aria-label={language === 'fa' ? 'نتایج جست‌وجو' : 'Search results'}>
+              {(networkLayers?.segments_geojson.features ?? []).filter((feature) =>
+                `${feature.properties?.name ?? ''} ${feature.properties?.segment_id ?? ''}`.toLowerCase().includes(segmentSearch.trim().toLowerCase())
+              ).slice(0, 5).map((feature) => (
+                <button key={String(feature.properties?.segment_id)} type="button" className="block w-full text-start px-2 py-1 text-xs hover:bg-cyan-500/20 rounded"
+                  onClick={() => {
+                    if (feature.geometry.type !== 'LineString') return;
+                    const coords = feature.geometry.coordinates;
+                    const midpoint = coords[Math.floor(coords.length / 2)];
+                    if (midpoint) mapRef.current?.flyTo({ center: [midpoint[0], midpoint[1]], zoom: 15.5 });
+                    onSelectSegment(Number(feature.properties?.segment_id));
+                    setSegmentSearch('');
+                  }}>
+                  {feature.properties?.name || 'Segment'} · #{feature.properties?.segment_id}
+                </button>
+              ))}
+              {!(networkLayers?.segments_geojson.features ?? []).some((feature) =>
+                `${feature.properties?.name ?? ''} ${feature.properties?.segment_id ?? ''}`.toLowerCase().includes(segmentSearch.trim().toLowerCase())
+              ) && <p className="px-2 py-1 text-xs opacity-70">{language === 'fa' ? 'قطعه‌ای پیدا نشد.' : 'No segments found.'}</p>}
+            </div>
+          )}
 
           {/* Map Interaction Tools */}
           <div className="flex items-center gap-1 mt-2 pt-2 border-t border-slate-800/60 flex-wrap">
